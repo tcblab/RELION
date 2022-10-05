@@ -24,8 +24,9 @@
 #include "src/multidim_array.h"
 #include "src/image.h"
 
-#include "src/jaz/volume.h"
-#include "src/jaz/gravis/t2Vector.h"
+#include <src/jaz/single_particle/volume.h>
+#include <src/jaz/gravis/t2Vector.h>
+
 #ifdef CUDA
 #include "src/acc/cuda/cuda_mem_utils.h"
 #include "src/acc/acc_ptr.h"
@@ -47,6 +48,7 @@ void run_updatePowerSpectrum(RFLOAT *dcounter, int sz, RFLOAT *dpower_spectrum);
 
 extern void scale(RFLOAT *img, size_t sz, RFLOAT val, cudaStream_t stream = 0);
 #endif
+
 
 
 #define NEAREST_NEIGHBOUR 0

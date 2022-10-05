@@ -18,7 +18,7 @@
  * author citations must be preserved.
  ***************************************************************************/
 #include <src/autopicker.h>
-#ifdef CUDA
+#ifdef _CUDA_ENABLED
 #include <src/acc/cuda/cuda_autopicker.h>
 #endif
 
@@ -32,23 +32,28 @@ int main(int argc, char *argv[])
 
 		prm.initialise();
 
-#ifdef CUDA
+#ifdef _CUDA_ENABLED
+		std::stringstream didSs;
 		if (prm.do_gpu)
 		{
-			std::stringstream didSs;
 			didSs << "AP";
-			int dev_id = prm.deviceInitialise();
-			prm.cudaPicker = (void*) new AutoPickerCuda((AutoPicker*)&prm, dev_id, didSs.str().c_str() );
+			prm.deviceInitialise();
+		}
 
+		if (prm.do_gpu && !(prm.do_topaz_train || prm.do_topaz_extract))
+		{
+			prm.cudaPicker = (void*) new AutoPickerCuda((AutoPicker*)&prm, didSs.str().c_str());
 			((AutoPickerCuda*)prm.cudaPicker)->run();
 		}
 		else
 #endif
 		{
-			prm.run();
+			if (prm.do_topaz_train) prm.trainTopaz();
+			else prm.run();
 		}
 
-		prm.generatePDFLogfile();
+		if (!prm.do_topaz_train)
+			prm.generatePDFLogfile();
 
 #ifdef TIMING
 		std::cout << "timings:" << std::endl;

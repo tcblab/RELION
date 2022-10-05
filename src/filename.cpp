@@ -454,6 +454,24 @@ bool FileName::getTheOtherHalf(FileName &fn_out) const
 	return true;
 }
 
+bool FileName::getHalf(FileName &fn_out, int halfset) const
+{
+	FileName ret = this->afterLastOf("/");
+
+	if (ret.contains("half1") && halfset == 2)
+		ret.replaceAllSubstrings("half1", "half2");
+	else if (ret.contains("half2") && halfset == 1)
+		ret.replaceAllSubstrings("half2", "half1");
+	else
+		return false;
+
+	if (this->contains("/"))
+		ret = this->beforeLastOf("/") + "/" + ret;
+
+	fn_out = ret;
+	return true;
+}
+
 bool FileName::validateCharactersStrict(bool do_allow_double_dollar) const
 {
 
@@ -508,6 +526,8 @@ void move(const FileName &fn_src, const FileName &fn_dest)
 
 int mktree(const FileName &fn_dir, mode_t mode)
 {
+	if (exists(fn_dir)) return 0;
+
 	std::string s = fn_dir;
 	size_t pre=0,pos;
 	std::string dir;
@@ -532,6 +552,46 @@ int mktree(const FileName &fn_dir, mode_t mode)
 	}
 
 	return mdret;
+}
+
+FileName realpath(const FileName &fn, bool allow_nonexisting_path)
+{
+	char retval[PATH_MAX];
+
+	if (allow_nonexisting_path)
+	{
+		char *dont_care = realpath(fn.c_str(), retval);
+		if (retval == NULL)
+		{
+			REPORT_ERROR(std::string("Failed to resolve realpath of ") + fn);
+		}
+	}
+	else
+	{
+		if (realpath(fn.c_str(), retval) == NULL)
+		{
+			REPORT_ERROR(std::string("Failed to resolve realpath of ") + fn);
+		}
+	}
+
+	return FileName(retval);
+}
+
+void symlink(const FileName &src, const FileName &dst)
+{
+	// If the output file exists, remove it first
+	if (exists(dst))
+	{
+		if (remove(dst.c_str()) != 0)
+		{
+			REPORT_ERROR(std::string("Failed to remove existing file ") + dst.c_str() + " to make symlink ");
+		}
+	}
+
+	if (symlink(src.c_str(), dst.c_str()) != 0)
+	{
+		REPORT_ERROR(std::string("Failed to make a symlink from ") + src.c_str() + " to " + dst.c_str());
+	}
 }
 
 bool decomposePipelineFileName(FileName fn_in, FileName &fn_pre, FileName &fn_jobnr, FileName &fn_post)

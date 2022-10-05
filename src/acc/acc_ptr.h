@@ -2,7 +2,7 @@
 #define ACC_PTR_H_
 
 #include "src/acc/settings.h"
-#ifdef CUDA
+#ifdef _CUDA_ENABLED
 #include "src/acc/cuda/cuda_settings.h"
 #include <cuda_runtime.h>
 #include "src/acc/cuda/custom_allocator.cuh"
@@ -16,7 +16,6 @@
 #include <fstream>
 #include <iostream>
 #include <vector>
-#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -52,7 +51,7 @@ static void HandleAccPtrDebugInformational( const char *err, const char *file, i
 enum AccType {accUNSET, accCUDA, accCPU};
 
 
-#ifdef CUDA
+#ifdef _CUDA_ENABLED
 typedef cudaStream_t StreamType;
 typedef CudaCustomAllocator AllocatorType;
 typedef CudaCustomAllocator::Alloc AllocationType;
@@ -86,7 +85,7 @@ public:
 	AccPtr(AllocatorType *allocator):
 		size(0), hPtr(NULL), dPtr(NULL), doFreeHost(false),
 		doFreeDevice(false), allocator(allocator), alloc(NULL), stream(cudaStreamPerThread),
-#ifdef CUDA
+#ifdef _CUDA_ENABLED
 		accType(accCUDA)
 #else
 		accType(accCPU)
@@ -96,7 +95,7 @@ public:
 	AccPtr(StreamType stream, AllocatorType *allocator):
 		size(0), hPtr(NULL), dPtr(NULL), doFreeHost(false),
 		doFreeDevice(false), allocator(allocator), alloc(NULL), stream(stream),
-#ifdef CUDA
+#ifdef _CUDA_ENABLED
 		accType(accCUDA)
 #else
 		accType(accCPU)
@@ -106,7 +105,7 @@ public:
 	AccPtr(size_t size, AllocatorType *allocator):
 		size(size), dPtr(NULL), doFreeHost(true),
 		doFreeDevice(false), allocator(allocator), alloc(NULL), stream(cudaStreamPerThread),
-#ifdef CUDA
+#ifdef _CUDA_ENABLED
 		accType(accCUDA)
 #else
 		accType(accCPU)
@@ -119,7 +118,7 @@ public:
 	AccPtr(size_t size, StreamType stream, AllocatorType *allocator):
 		size(size), dPtr(NULL), doFreeHost(true),
 		doFreeDevice(false), allocator(allocator), alloc(NULL), stream(stream),
-#ifdef CUDA
+#ifdef _CUDA_ENABLED
 		accType(accCUDA)
 #else
 		accType(accCPU)
@@ -132,7 +131,7 @@ public:
 	AccPtr(T * h_start, size_t size, AllocatorType *allocator):
 		size(size), hPtr(h_start), dPtr(NULL), doFreeHost(false),
 		doFreeDevice(false), allocator(allocator), alloc(NULL), stream(cudaStreamPerThread),
-#ifdef CUDA
+#ifdef _CUDA_ENABLED
 		accType(accCUDA)
 #else
 		accType(accCPU)
@@ -142,7 +141,7 @@ public:
 	AccPtr(T * h_start, size_t size, StreamType stream, AllocatorType *allocator):
 		size(size), hPtr(h_start), dPtr(NULL), doFreeHost(false),
 		doFreeDevice(false), allocator(allocator), alloc(NULL), stream(cudaStreamPerThread),
-#ifdef CUDA
+#ifdef _CUDA_ENABLED
 		accType(accCUDA)
 #else
 		accType(accCPU)
@@ -152,7 +151,7 @@ public:
 	AccPtr(T * h_start, T * d_start, size_t size, AllocatorType *allocator):
 		size(size), hPtr(h_start), dPtr(d_start), doFreeHost(false),
 		doFreeDevice(false), allocator(allocator), alloc(NULL), stream(cudaStreamPerThread),
-#ifdef CUDA
+#ifdef _CUDA_ENABLED
 		accType(accCUDA)
 #else
 		accType(accCPU)
@@ -162,7 +161,7 @@ public:
 	AccPtr(T * h_start, T * d_start, size_t size, StreamType stream, AllocatorType *allocator):
 		size(size), hPtr(h_start), dPtr(d_start), doFreeHost(false),
 		doFreeDevice(false), allocator(allocator), alloc(NULL), stream(stream),
-#ifdef CUDA
+#ifdef _CUDA_ENABLED
 		accType(accCUDA)
 #else
 		accType(accCPU)
@@ -176,7 +175,7 @@ public:
 	AccPtr():
 		size(0), hPtr(NULL), dPtr(NULL), doFreeHost(false),
 		doFreeDevice(false), allocator(NULL), alloc(NULL), stream(cudaStreamPerThread),
-#ifdef CUDA
+#ifdef _CUDA_ENABLED
 		accType(accCUDA)
 #else
 		accType(accCPU)
@@ -186,7 +185,7 @@ public:
 	AccPtr(StreamType stream):
 		size(0), hPtr(NULL), dPtr(NULL), doFreeHost(false),
 		doFreeDevice(false), allocator(NULL), alloc(NULL), stream(stream),
-#ifdef CUDA
+#ifdef _CUDA_ENABLED
 		accType(accCUDA)
 #else
 		accType(accCPU)
@@ -196,7 +195,7 @@ public:
 	AccPtr(size_t size):
 		size(size), dPtr(NULL), doFreeHost(true),
 		doFreeDevice(false), allocator(NULL), alloc(NULL), stream(cudaStreamPerThread),
-#ifdef CUDA
+#ifdef _CUDA_ENABLED
 		accType(accCUDA)
 #else
 		accType(accCPU)
@@ -209,7 +208,7 @@ public:
 	AccPtr(size_t size, StreamType stream):
 		size(size), dPtr(NULL), doFreeHost(true),
 		doFreeDevice(false), allocator(NULL), alloc(NULL), stream(stream),
-#ifdef CUDA
+#ifdef _CUDA_ENABLED
 		accType(accCUDA)
 #else
 		accType(accCPU)
@@ -222,7 +221,7 @@ public:
 	AccPtr(T * h_start, size_t size):
 		size(size), hPtr(h_start), dPtr(NULL), doFreeHost(false),
 		doFreeDevice(false), allocator(NULL), alloc(NULL), stream(cudaStreamPerThread),
-#ifdef CUDA
+#ifdef _CUDA_ENABLED
 		accType(accCUDA)
 #else
 		accType(accCPU)
@@ -232,7 +231,7 @@ public:
 	AccPtr(T * h_start, size_t size, StreamType stream):
 		size(size), hPtr(h_start), dPtr(NULL), doFreeHost(false),
 		doFreeDevice(false), allocator(NULL), alloc(NULL), stream(cudaStreamPerThread),
-#ifdef CUDA
+#ifdef _CUDA_ENABLED
 		accType(accCUDA)
 #else
 		accType(accCPU)
@@ -242,7 +241,7 @@ public:
 	AccPtr(T * h_start, T * d_start, size_t size):
 		size(size), hPtr(h_start), dPtr(d_start), doFreeHost(false),
 		doFreeDevice(false), allocator(NULL), alloc(NULL), stream(cudaStreamPerThread),
-#ifdef CUDA
+#ifdef _CUDA_ENABLED
 		accType(accCUDA)
 #else
 		accType(accCPU)
@@ -252,7 +251,7 @@ public:
 	AccPtr(T * h_start, T * d_start, size_t size, StreamType stream):
 		size(size), hPtr(h_start), dPtr(d_start), doFreeHost(false),
 		doFreeDevice(false), allocator(NULL), alloc(NULL), stream(stream),
-#ifdef CUDA
+#ifdef _CUDA_ENABLED
 		accType(accCUDA)
 #else
 		accType(accCPU)
@@ -287,7 +286,7 @@ public:
 
 	void markReadyEvent()
 	{
-#ifdef CUDA
+#ifdef _CUDA_ENABLED
 		if (accType == accCUDA)
 		{
 #ifdef DEBUG_CUDA
@@ -304,7 +303,7 @@ public:
 	 */
 	void deviceAlloc()
 	{
-#ifdef CUDA
+#ifdef _CUDA_ENABLED
 		if (accType == accCUDA)
 		{
 #ifdef DEBUG_CUDA
@@ -461,7 +460,7 @@ public:
 	 */
 	void deviceInit(int value)
 	{
-#ifdef CUDA
+#ifdef _CUDA_ENABLED
 		if (accType == accCUDA)
 		{
 #ifdef DEBUG_CUDA
@@ -511,7 +510,7 @@ public:
 	 */
 	void cpToDevice()
 	{
-#ifdef CUDA
+#ifdef _CUDA_ENABLED
 		if (accType == accCUDA)
 		{
 #ifdef DEBUG_CUDA
@@ -566,7 +565,7 @@ public:
 	 */
 	void cpToHost()
 	{
-#ifdef CUDA
+#ifdef _CUDA_ENABLED
 		if (accType == accCUDA)
 		{
 #ifdef DEBUG_CUDA
@@ -585,7 +584,7 @@ public:
 	 */
 	void cpToHost(size_t thisSize)
 	{
-#ifdef CUDA
+#ifdef _CUDA_ENABLED
 		if (accType == accCUDA)
 		{
 #ifdef DEBUG_CUDA
@@ -604,7 +603,7 @@ public:
 	 */
 	void cpToHost(T* hstPtr, size_t thisSize)
 	{
-#ifdef CUDA
+#ifdef _CUDA_ENABLED
 		if (accType == accCUDA)
 		{
 #ifdef DEBUG_CUDA
@@ -623,7 +622,7 @@ public:
 	 */
 	void cpToHostOnStream(StreamType s)
 	{
-#ifdef CUDA
+#ifdef _CUDA_ENABLED
 		if (accType == accCUDA)
 		{
 #ifdef DEBUG_CUDA
@@ -642,7 +641,7 @@ public:
 	 */
 	void cpOnDevice(T * dstDevPtr)
 	{
-#ifdef CUDA
+#ifdef _CUDA_ENABLED
 		if (accType == accCUDA)
 		{
 #ifdef DEBUG_CUDA
@@ -782,7 +781,7 @@ public:
 	
 	void streamSync()
 	{
-#ifdef CUDA
+#ifdef _CUDA_ENABLED
 		if (accType == accCUDA)
 			DEBUG_HANDLE_ERROR(cudaStreamSynchronize(stream));
 #endif
@@ -790,7 +789,7 @@ public:
 
 	T getAccValueAt(size_t idx)
 	{
-#ifdef CUDA
+#ifdef _CUDA_ENABLED
 		if (accType == accCUDA)
 		{
 			T value;
@@ -805,7 +804,7 @@ public:
 
 	T getDeviceAt(size_t idx)
 	{
-#ifdef CUDA
+#ifdef _CUDA_ENABLED
 		if (accType == accCUDA)
 		{
 			T value;
@@ -821,7 +820,7 @@ public:
 	void dumpDeviceToFile(std::string fileName)
 	{
 
-#ifdef CUDA
+#ifdef _CUDA_ENABLED
 		if (accType == accCUDA)
 		{
 			T *tmp = new T[size];
@@ -867,7 +866,7 @@ public:
 	 */
 	void freeDevice()
 	{
-#ifdef CUDA
+#ifdef _CUDA_ENABLED
 		if (accType == accCUDA)
 		{
 #ifdef DEBUG_CUDA
@@ -1100,7 +1099,7 @@ public:
 	template <typename T>
 	void pack(AccPtr<T> &ptr)
 	{
-#ifdef CUDA
+#ifdef _CUDA_ENABLED
 	#ifdef DEBUG_CUDA
 		if (current_packed_pos + ptr.getSize() > size)
 			ACC_PTR_DEBUG_FATAL("Packing exceeds bundle total size.\n");
@@ -1124,29 +1123,29 @@ public:
 	
 	void allAlloc()
 	{
-#ifdef CUDA
+#ifdef _CUDA_ENABLED
 		AccPtr<AccPtrBundleByte>::allAlloc();
 #endif
 	}
 	
 	void allAlloc(size_t size)
 	{
-#ifdef CUDA
+#ifdef _CUDA_ENABLED
 		AccPtr<AccPtrBundleByte>::allAlloc(size);
 #endif
 	}
 	
 	void hostAlloc()
 	{
-#ifdef CUDA
-		AccPtr<AccPtrBundleByte>::hostAlloc();
+#ifdef _CUDA_ENABLED
+AccPtr<AccPtrBundleByte>::hostAlloc();
 #endif
 	}
 	
 	void hostAlloc(size_t size)
 	{
-#ifdef CUDA
-		AccPtr<AccPtrBundleByte>::hostAlloc(size);
+#ifdef _CUDA_ENABLED
+AccPtr<AccPtrBundleByte>::hostAlloc(size);
 #endif
 	}
 	

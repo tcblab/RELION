@@ -129,7 +129,7 @@ void PipeLine::addNewOutputEdge(long int myProcess, Node &_Node)
 
 }
 
-long int PipeLine::addNewProcess(Process &_Process, bool do_overwrite)
+long int PipeLine::addNewProcess(Process &_Process)
 {
 	// Check whether Process with the same name already exists in the processList
 	bool is_found = false;
@@ -147,10 +147,6 @@ long int PipeLine::addNewProcess(Process &_Process, bool do_overwrite)
 	{
 		processList.push_back(_Process);
 		job_counter++;
-	}
-	else if (!do_overwrite)
-	{
-		REPORT_ERROR("PipeLine::addNewProcess: ERROR: trying to add existing Process to the pipeline, while overwriting is not allowed.");
 	}
 	return i;
 }
@@ -189,6 +185,25 @@ long int PipeLine::findProcessByAlias(std::string name)
 	return -1;
 }
 
+bool PipeLine::checkDependency(long int process)
+{
+
+	bool has_dependecies = false;
+
+	for (size_t inode = 0; inode < (processList[process]).outputNodeList.size(); inode++)
+	{
+		long int mynode = (processList[process]).outputNodeList[inode];
+		if (nodeList[mynode].inputForProcessList.size() > 0)
+		{
+			has_dependecies = true;
+			break;
+		}
+	}
+
+	return has_dependecies;
+
+}
+
 bool PipeLine::touchTemporaryNodeFile(Node &node, bool touch_even_if_not_exist)
 {
 	if (do_read_only)
@@ -217,15 +232,16 @@ bool PipeLine::touchTemporaryNodeFile(Node &node, bool touch_even_if_not_exist)
 	if (exists(node.name) || touch_even_if_not_exist)
 	{
 		// Make subdirectory for each type of node
-		FileName fn_type = integerToString(node.type) + "/";
+		// Only at the highest level, so before the first "."
+        //FileName fn_label = get_node_label(node.type);
+        // PIPELINER
+		FileName fn_label = node.type;
+		FileName fn_type = fn_label.beforeFirstOf(".") + "/";
+
 		FileName mydir = fn_dir + fn_type + fnt.substr(0, fnt.rfind("/") + 1);
 		FileName mynode = fn_dir + fn_type + fnt;
-		std::string command;
-		if (!exists(mydir))
-		{
-			command = "mkdir -p " + mydir;
-			int res = system(command.c_str());
-		}
+
+		mktree(mydir);
 		touch(mynode);
 		return true;
 	}
@@ -274,7 +290,9 @@ void PipeLine::deleteTemporaryNodeFile(Node &node)
 	else
 		fnt = node.name;
 
-	FileName fn_type = integerToString(node.type) + "/";
+    //FileName fn_type = get_node_label(node.type) + "/";
+	// PIPELINER
+    FileName fn_type = node.type + "/";
 	FileName fn = fn_dir + fn_type + fnt;
 	int res = remove(fn.c_str());
 
@@ -296,6 +314,13 @@ void PipeLine::deleteTemporaryNodeFiles(Process &process)
 		deleteTemporaryNodeFile(nodeList[mynode]);
 	}
 
+}
+
+void PipeLine::setJobCounter(long int value)
+{
+	read(DO_LOCK);
+	job_counter = value;
+	write(DO_LOCK);
 }
 
 void PipeLine::remakeNodeDirectory()
@@ -417,16 +442,13 @@ bool PipeLine::checkProcessCompletion()
 
 }
 
-bool PipeLine::getCommandLineJob(RelionJob &thisjob, int current_job, bool is_main_continue,
-                                 bool is_scheduled, bool do_makedir, bool do_overwrite_current,
+bool PipeLine::getCommandLineJob(RelionJob &thisjob, int current_job, bool is_main_continue, bool is_scheduled, bool do_makedir,
                                  std::vector<std::string> &commands, std::string &final_command, std::string &error_message)
 {
 
-	if (do_overwrite_current) is_main_continue = false;
-
 	// Except for continuation or scheduled jobs, all jobs get a new unique directory
 	std::string my_outputname;
-	if ((is_main_continue || is_scheduled || do_overwrite_current) && current_job < processList.size())
+	if ((is_main_continue || is_scheduled) && current_job < processList.size())
 	{
 		if (current_job < 0)
 			REPORT_ERROR("BUG: current_job < 0");
@@ -451,7 +473,7 @@ bool PipeLine::getCommandLineJob(RelionJob &thisjob, int current_job, bool is_ma
 }
 
 // Adds thisjob to the pipeline and returns the id of the newprocess
-long int PipeLine::addJob(RelionJob &thisjob, int as_status, bool do_overwrite, bool do_write_minipipeline)
+long int PipeLine::addJob(RelionJob &thisjob, int as_status, bool do_write_minipipeline)
 {
 
 	// Also write a mini-pipeline in the output directory
@@ -459,8 +481,8 @@ long int PipeLine::addJob(RelionJob &thisjob, int as_status, bool do_overwrite, 
 	mini_pipeline.setName(thisjob.outputName+"job");
 
 	// Add Process to the processList of the pipeline
-	Process process(thisjob.outputName, thisjob.type, as_status);
-	long int myProcess = addNewProcess(process, do_overwrite);
+	Process process(thisjob.outputName, thisjob.label, thisjob.type, as_status);
+	long int myProcess = addNewProcess(process);
 	mini_pipeline.addNewProcess(process);
 
 	// Add all input nodes
@@ -486,31 +508,127 @@ long int PipeLine::addJob(RelionJob &thisjob, int as_status, bool do_overwrite, 
 	return myProcess;
 }
 
-bool PipeLine::runJob(RelionJob &_job, int &current_job, bool only_schedule, bool is_main_continue,
-                      bool is_scheduled, bool do_overwrite_current, std::string &error_message)
+// new function added for ccpem pipeliner
+bool PipeLine::PrintComCpipe(RelionJob &thisjob, int current_job, bool is_main_continue,
+                                 bool is_scheduled, bool do_makedir,
+                                 std::vector<std::string> &commands, std::string &final_command, std::string &error_message)
+{
+	if (!makeJobFilesCpipe(thisjob, current_job, false, is_main_continue, is_scheduled, error_message))
+	{
+		std::string error_com = "echo " + error_message;
+		int res = system(error_com.c_str());
+		return false;
+	}
+	std::string command  = "reSPYon --print_command .TMP_runfiles/job.star ";
+	int res = system(command.c_str());
+	return true;
+
+}
+
+// New function for ccpem pipeliner - just makes the output dir and the job.star file...
+bool PipeLine::makeJobFilesCpipe(RelionJob &_job, int &current_job, bool only_schedule, bool is_main_continue,
+                      bool is_scheduled, std::string &error_message)
 {
 	std::vector<std::string> commands;
 	std::string final_command;
 
-	// Remove run.out and run.err when overwriting a job
-	if (do_overwrite_current) is_main_continue = false;
-
 	// true means makedir
-	if (!getCommandLineJob(_job, current_job, is_main_continue, is_scheduled, true, do_overwrite_current, commands, final_command, error_message))
+	if (!getCommandLineJob(_job, current_job, is_main_continue, is_scheduled, true, commands, final_command, error_message))
 	{
 		return false;
 	}
 
-	// Remove run.out and run.err when overwriting a job
-	if (do_overwrite_current)
+	//remove any old TMP files
+	FILE *file;
+	if (file = fopen(".TMP_runfiles/job.star", "r"))
 	{
-		// Completely empty the output directory, NOTE that  _job.outputName+ is not defined until AFTER calling getCommandLineJob!!!
-		std::string command = " rm -rf " + _job.outputName + "*";
-		int res = system(command.c_str());
+		fclose(file);
+		std::string removecom = "rm .TMP_runfiles/job.star";
+		int res = system(removecom.c_str());
+	}
 
-		// Above deletes run_submit.script too, so we have to call this again ...
-		if (!getCommandLineJob(_job, current_job, is_main_continue, is_scheduled, true, do_overwrite_current, commands, final_command, error_message))
-			return false;
+	// Save temporary hidden file with this jobs settings as default for a new job
+	_job.write("");
+
+	// temp dir to store the current runfile
+	std::string tmpout = ".TMP_runfiles/";
+
+	// save a temporary jobfile
+	_job.write(tmpout);
+
+	if (is_main_continue)
+	{
+		//make the new job.star file to the job dir as continue_job.star
+		std::string movecom = "cp .TMP_runfiles/job.star " + _job.outputName + "continue_job.star";
+		int res = system(movecom.c_str());
+	}
+
+	return true;
+}
+
+// modified runJob function for ccpem-pipeliner
+bool PipeLine::runJobCpipe(RelionJob &_job, int &current_job, bool only_schedule, bool is_main_continue,
+                      bool is_scheduled, std::string &error_message)
+{
+	makeJobFilesCpipe(_job, current_job, only_schedule, is_main_continue, is_scheduled, error_message);
+	int mynewstatus;
+	if (only_schedule)
+		mynewstatus = PROC_SCHEDULED;
+	else
+		mynewstatus = PROC_RUNNING;	current_job = addJob(_job, mynewstatus);
+	if (only_schedule)
+	{
+		if (!is_main_continue)
+		{
+			std::string command  = "reSPYon --schedule_job .TMP_runfiles/job.star";
+			int res = system(command.c_str());
+			return true;
+		}
+		else if (is_main_continue)
+		{
+			char buffer[256]; sprintf(buffer, "%03d", current_job+1);
+			std::string job_num_string;
+			job_num_string =  buffer;
+			std::string jobname = "job" + job_num_string;
+			std::string command  = "reSPYon --schedule_job " + jobname;
+			int res = system(command.c_str());
+			return true;
+		}
+	}
+
+	if (!is_main_continue)
+	{
+		//run in pipeliner
+		std::string command  = "reSPYon --run_job .TMP_runfiles/job.star &";
+		int res = system(command.c_str());
+		std::string message = "echo 'Running job as: " + _job.outputName + "'";
+		res = system(message.c_str());
+		return true;
+	}
+
+	if (is_main_continue)
+	{
+		// run in the pipeliner
+		std::string command  = "reSPYon --continue_job " + _job.outputName + " &";
+		int res = system(command.c_str());
+		std::string message = "echo 'Continuing job " + _job.outputName + "'";
+		res = system(message.c_str());
+		return true;
+	}
+
+	return false;
+}
+
+bool PipeLine::runJob(RelionJob &_job, int &current_job, bool only_schedule, bool is_main_continue,
+                      bool is_scheduled, std::string &error_message, bool write_hidden_guifile)
+{
+	std::vector<std::string> commands;
+	std::string final_command;
+
+	// true means makedir
+	if (!getCommandLineJob(_job, current_job, is_main_continue, is_scheduled, true, commands, final_command, error_message))
+	{
+		return false;
 	}
 
 	// Read in the latest version of the pipeline, just in case anyone else made a change meanwhile...
@@ -518,7 +636,7 @@ bool PipeLine::runJob(RelionJob &_job, int &current_job, bool only_schedule, boo
 	read(DO_LOCK, lock_message);
 
 	// Save temporary hidden file with this jobs settings as default for a new job
-	_job.write("");
+	if (write_hidden_guifile) _job.write("");
 
 	// Also save a copy of the GUI settings with the current output name
 	_job.write(_job.outputName);
@@ -528,72 +646,6 @@ bool PipeLine::runJob(RelionJob &_job, int &current_job, bool only_schedule, boo
 	std::remove((_job.outputName+RELION_JOB_EXIT_ABORTED).c_str());
 	std::remove((_job.outputName+RELION_JOB_EXIT_SUCCESS).c_str());
 	std::remove((_job.outputName+RELION_JOB_EXIT_FAILURE).c_str());
-
-
-	/*
-	// If this is a continuation job, check whether output files exist and move away!
-	// This is to ensure that the continuation job goes OK and will show up as 'running' in the GUI
-	bool do_move_output_nodes_to_old = false;
-	if (!only_schedule && is_main_continue)
-	{
-		do_move_output_nodes_to_old = !(processList[current_job].type == PROC_2DCLASS ||
-		                                processList[current_job].type == PROC_3DCLASS ||
-		                                processList[current_job].type == PROC_INIMODEL ||
-		                                processList[current_job].type == PROC_3DAUTO ||
-		                                processList[current_job].type == PROC_MULTIBODY ||
-		                                processList[current_job].type == PROC_MANUALPICK ||
-		                                processList[current_job].type == PROC_CLASSSELECT);
-
-		// For continuation of relion_refine jobs, remove the original output nodes from the list
-		if (processList[current_job].type == PROC_2DCLASS ||
-		    processList[current_job].type == PROC_3DCLASS ||
-		    processList[current_job].type == PROC_3DAUTO ||
-		    processList[current_job].type == PROC_MULTIBODY ||
-		    processList[current_job].type == PROC_INIMODEL)
-		{
-
-			std::vector<bool> deleteNodes, deleteProcesses;
-			deleteNodes.resize(nodeList.size(), false);
-			deleteProcesses.resize(processList.size(), false);
-
-			for (long int inode = 0; inode < (processList[current_job]).outputNodeList.size(); inode++)
-			{
-				long int mynode = (processList[current_job]).outputNodeList[inode];
-				if(!exists(nodeList[mynode].name))
-					deleteNodes[mynode] = true;
-			}
-
-			FileName fn_del = "tmp";
-			write(DO_LOCK, fn_del, deleteNodes, deleteProcesses);
-			std::remove("tmpdeleted_pipeline.star");
-
-			// Read the updated pipeline back in again
-			lock_message += " part 2";
-			read(DO_LOCK, lock_message);
-
-		}
-	} // end if !only_schedule && is_main_continue
-
-	// If a job is executed with a non-continue scheduled job, then also move away any existing output node files
-	if (current_job >= 0 && (is_scheduled && !is_main_continue) || do_overwrite_current)
-		do_move_output_nodes_to_old = true;
-
-	// Move away existing output nodes
-	if (do_move_output_nodes_to_old)
-	{
-
-		for (int i = 0; i < processList[current_job].outputNodeList.size(); i++)
-		{
-			int j = processList[current_job].outputNodeList[i];
-			std::string fn_node = nodeList[j].name;
-			if (exists(fn_node))
-			{
-				std::string path2 =  fn_node + ".old";
-				rename(fn_node.c_str(), path2.c_str());
-			}
-		}
-	}
-	*/
 
 	// For continuation of relion_refine jobs, remove the original output nodes from the list
 	if (!only_schedule && is_main_continue)
@@ -636,7 +688,7 @@ bool PipeLine::runJob(RelionJob &_job, int &current_job, bool only_schedule, boo
 	bool allow_overwrite = is_main_continue || is_scheduled; // continuation and scheduled jobs always allow overwriting into the existing directory
 
 	// Add the job to the pipeline, and set current_job to the new one
-	current_job = addJob(_job, mynewstatus, allow_overwrite || do_overwrite_current);
+	current_job = addJob(_job, mynewstatus);
 
 	// Write out the new pipeline
 	write(DO_LOCK);
@@ -671,52 +723,20 @@ bool PipeLine::runJob(RelionJob &_job, int &current_job, bool only_schedule, boo
 }
 
 // Adds a scheduled job to the pipeline from the command line
-int PipeLine::addScheduledJob(std::string typestring, std::string fn_options)
+int PipeLine::addScheduledJob(std::string typestring, std::string fn_options, bool write_hidden_guifile)
 {
-	int type;
-	if (typestring == PROC_IMPORT_NAME)
-		type = PROC_IMPORT;
-	else if (typestring == PROC_MOTIONCORR_NAME)
-		type = PROC_MOTIONCORR;
-	else if (typestring == PROC_CTFFIND_NAME)
-		type = PROC_CTFFIND;
-	else if (typestring == PROC_MANUALPICK_NAME)
-		type = PROC_MANUALPICK;
-	else if (typestring == PROC_AUTOPICK_NAME)
-		type = PROC_AUTOPICK;
-	else if (typestring == PROC_EXTRACT_NAME)
-		type = PROC_EXTRACT;
-	else if (typestring == PROC_CLASSSELECT_NAME)
-		type = PROC_CLASSSELECT;
-	else if (typestring == PROC_2DCLASS_NAME)
-		type = PROC_2DCLASS;
-	else if (typestring == PROC_3DCLASS_NAME)
-		type = PROC_3DCLASS;
-	else if (typestring == PROC_3DAUTO_NAME)
-		type = PROC_3DAUTO;
-	else if (typestring == PROC_MASKCREATE_NAME)
-		typestring = PROC_MASKCREATE;
-	else if (typestring == PROC_JOINSTAR_NAME)
-		type = PROC_JOINSTAR;
-	else if (typestring == PROC_SUBTRACT_NAME)
-		type = PROC_SUBTRACT;
-	else if (typestring == PROC_POST_NAME)
-		type = PROC_POST;
-	else if (typestring == PROC_RESMAP_NAME)
-		type = PROC_RESMAP;
-	else if (typestring == PROC_INIMODEL_NAME)
-		type = PROC_INIMODEL;
-	else if (typestring == PROC_EXTERNAL_NAME)
-		type = PROC_EXTERNAL;
-	else
-		REPORT_ERROR("ERROR: unrecognised string for job type: " + typestring);
 
-	return addScheduledJob(type, fn_options);
+	return addScheduledJob(get_proc_type(typestring), fn_options, write_hidden_guifile);
+
 }
 
 // Adds a scheduled job to the pipeline from the command line
-int PipeLine::addScheduledJob(int job_type, std::string fn_options)
+int PipeLine::addScheduledJob(int job_type, std::string fn_options, bool write_hidden_guifile)
 {
+	// Make sure we have the very latest version of the pipeline
+	read(DO_LOCK, "lock from addScheduledJob");
+	write(DO_LOCK);
+
 	RelionJob job;
 	job.initialise(job_type);
 	std::vector<std::string> options;
@@ -730,15 +750,19 @@ int PipeLine::addScheduledJob(int job_type, std::string fn_options)
 
 	std::string error_message;
 	int current_job = processList.size();
-	if (!runJob(job, current_job, true, job.is_continue, false, false, error_message)) // true is only_schedule, false means !is_scheduled, 2nd false means dont overwrite current
+	if (!runJob(job, current_job, true, job.is_continue, false, error_message, write_hidden_guifile)) // true is only_schedule, false means !is_scheduled
 		REPORT_ERROR(error_message.c_str());
 
 	return current_job;
 }
 
 // Adds a scheduled job to the pipeline from the command line
-int PipeLine::addScheduledJob(RelionJob &job, std::string fn_options)
+int PipeLine::addScheduledJob(RelionJob &job, std::string fn_options, bool write_hidden_guifile)
 {
+	// Make sure we have the very latest version of the pipeline
+	read(DO_LOCK, "lock from addScheduledJob");
+	write(DO_LOCK);
+
 	if (fn_options != "")
 	{
 		std::vector<std::string> options;
@@ -749,7 +773,7 @@ int PipeLine::addScheduledJob(RelionJob &job, std::string fn_options)
 
 	std::string error_message;
 	int current_job = processList.size();
-	if (!runJob(job, current_job, true, job.is_continue, false, false, error_message)) // true is only_schedule, false means !is_scheduled, 2nd false means dont overwrite current
+	if (!runJob(job, current_job, true, job.is_continue, false, error_message, write_hidden_guifile)) // true is only_schedule, false means !is_scheduled
 		REPORT_ERROR(error_message.c_str());
 
 	return current_job;
@@ -759,7 +783,7 @@ void PipeLine::waitForJobToFinish(int current_job, bool &is_failure, bool &is_ab
 {
 	while (true)
 	{
-		sleep(10);
+		sleep(1);
 		checkProcessCompletion();
 		if (processList[current_job].status == PROC_FINISHED_SUCCESS ||
 		    processList[current_job].status == PROC_FINISHED_ABORTED ||
@@ -784,7 +808,7 @@ void PipeLine::waitForJobToFinish(int current_job, bool &is_failure, bool &is_ab
 }
 
 void PipeLine::runScheduledJobs(FileName fn_sched, FileName fn_jobids, int nr_repeat,
-		long int minutes_wait, long int minutes_wait_before, long int seconds_wait_after, bool do_overwrite_current)
+		long int minutes_wait, long int minutes_wait_before, long int seconds_wait_after)
 {
 
 	std::vector<FileName> my_scheduled_processes;
@@ -883,7 +907,7 @@ void PipeLine::runScheduledJobs(FileName fn_sched, FileName fn_jobids, int nr_re
 			fh << " + " << ctime(&now) << " ---- Executing " << processList[current_job].name  << std::endl;
 			std::string error_message;
 
-			if (!runJob(myjob, current_job, false, is_continue, true, do_overwrite_current, error_message)) // true means is_scheduled; false=dont overwrite current
+			if (!runJob(myjob, current_job, false, is_continue, true, error_message)) // true means is_scheduled;
 				REPORT_ERROR(error_message);
 
 			// Now wait until that job is done!
@@ -1095,13 +1119,17 @@ void PipeLine::deleteNodesAndProcesses(std::vector<bool> &deleteNodes, std::vect
 	{
 		if (deleteProcesses[i])
 		{
+ 			//SHWS 28042021: TODO!!!!! Re-think this with ccpem-pipeliner, as processName is no longer necessarily the same as directory name!!!
+			// OR PERHAPS OK?
+
 			FileName alldirs = processList[i].name;
 			alldirs = alldirs.beforeLastOf("/");
 			// Move entire output directory (with subdirectory structure) to the Trash folder
 			FileName firstdirs = alldirs.beforeLastOf("/");
 			FileName fn_tree="Trash/" + firstdirs;
 			int res = mktree(fn_tree);
-			std::string command = "mv -f " + alldirs + " " + "Trash/" + firstdirs+"/.";
+			// Remove existing Trash directory if it exists, otherwise mv will fail
+			std::string command = "rm -rf Trash/" + alldirs + "; mv -f " + alldirs + " " + "Trash/" + firstdirs + "/. ; rm -rf " + alldirs;
 			res = system(command.c_str());
 			// Also remove the symlink if it exists
 			FileName fn_alias = (processList[i]).alias;
@@ -1133,16 +1161,16 @@ void PipeLine::getOutputNodesFromStarFile(int this_job)
 		MDnodes.read(outnodes, "output_nodes");
 
 		FileName nodename;
-		int nodetype;
+		std::string nodetypelabel;
 		FOR_ALL_OBJECTS_IN_METADATA_TABLE(MDnodes)
 		{
 			MDnodes.getValue(EMDL_PIPELINE_NODE_NAME, nodename);
-			MDnodes.getValue(EMDL_PIPELINE_NODE_TYPE, nodetype);
+			MDnodes.getValue(EMDL_PIPELINE_NODE_TYPE_LABEL, nodetypelabel);
 
 			// if this node does not exist yet, then add it to the pipeline
 			if (findNodeByName(nodename) < 0 )
 			{
-				Node node(nodename, nodetype);
+				Node node(nodename, nodetypelabel);
 				addNewOutputEdge(this_job, node);
 			}
 		}
@@ -1183,27 +1211,24 @@ bool PipeLine::markAsFinishedJob(int this_job, std::string &error_message, bool 
 		{
 
 			fn_opt = fn_opts[fn_opts.size()-1]; // the last one
+			Node node3(fn_opt, LABEL_OPTIMISER_CPIPE);
+			addNewOutputEdge(this_job, node3);
 
 			// Also get data.star
 			FileName fn_data = fn_opt.without("_optimiser.star") + "_data.star";
-			Node node2(fn_data, NODE_PART_DATA);
+			Node node2(fn_data, LABEL_PARTS_CPIPE);
 			addNewOutputEdge(this_job, node2);
 
 			FileName fn_root = fn_opt.without("_optimiser.star");
 			if (processList[this_job].type == PROC_3DAUTO)
 				fn_root += "_half1";
 
-			FileName fn_model = fn_root + "_model.star";
-			Node node3(fn_model, NODE_MODEL);
-			addNewOutputEdge(this_job, node3);
-
-
 			FileName fn_map = fn_root + "_class???.mrc";
 			std::vector<FileName> fn_maps;
 			fn_map.globFiles(fn_maps);
 			for (int i = 0; i < fn_maps.size(); i++)
 			{
-				Node node4(fn_maps[i], NODE_3DREF);
+				Node node4(fn_maps[i], LABEL_MAP_CPIPE);
 				addNewOutputEdge(this_job, node4);
 			}
 		}
@@ -1334,7 +1359,7 @@ bool PipeLine::setAliasJob(int this_job, std::string alias, std::string &error_m
 		//Make the new symbolic link
 		FileName path1 = "../" + processList[this_job].name;
 		FileName path2 = processList[this_job].alias;
-		int res = symlink(path1.c_str(), path2.beforeLastOf("/").c_str());
+		symlink(path1, path2.beforeLastOf("/"));
 
 	}
 
@@ -1348,47 +1373,6 @@ bool PipeLine::setAliasJob(int this_job, std::string alias, std::string &error_m
 
 }
 
-bool PipeLine::makeFlowChart(long int current_job, bool do_display_pdf, std::string &error_message)
-{
-	if (current_job < 0)
-	{
-		error_message = " You can only make flowcharts for existing jobs ... ";
-		return false;
-	}
-
-	const char * default_pdf_viewer = getenv ("RELION_PDFVIEWER_EXECUTABLE");
-	char mydefault[]=DEFAULTPDFVIEWER;
-	if (default_pdf_viewer == NULL)
-	{
-		default_pdf_viewer=mydefault;
-	}
-	std::string myviewer(default_pdf_viewer);
-
-	PipeLineFlowChart flowchart;
-	FileName fn_dir = processList[current_job].name;
-	FileName fn_out = "flowchart.tex";
-	flowchart.makeAllUpwardsFlowCharts(fn_out, *this, current_job);
-	std::string command = "latex flowchart.tex > flowchart.log && dvipdf flowchart >>flowchart.log && mv flowchart* " + fn_dir;
-	std:: cout << " Executing: " << command << std::endl;
-	int res = std::system(command.c_str());
-	if (do_display_pdf)
-	{
-		command = myviewer + " " + fn_dir + "flowchart.pdf &";
-		res = std::system(command.c_str());
-	}
-
-	// Read in existing pipeline, in case some other window had changed it
-	std::string lock_message = "makeFlowChart";
-	read(DO_LOCK, lock_message);
-
-	// Add the PDF file as a logfile to the outputnodes of this job, so it can be visualised from the Display button
-	Node node(fn_dir+"flowchart.pdf", NODE_PDF_LOGFILE);
-	addNewOutputEdge(current_job, node);
-
-	write(DO_LOCK);
-
-	return true;
-}
 // Undelete a Job from the pipeline, move back from Trash and insert back into the graph
 void PipeLine::undeleteJob(FileName fn_undel)
 {
@@ -1645,11 +1629,6 @@ bool PipeLine::cleanupJob(int this_job, bool do_harsh, std::string &error_messag
 			fn_pattern.globFiles(fns_del, false); // false means do not clear fns_del
 		}
 	} // end if subtract
-	else if (processList[this_job].type == PROC_POST)
-	{
-		fn_pattern = processList[this_job].name + "*masked.mrc";
-		fn_pattern.globFiles(fns_del, false); // false means do not clear fns_del
-	} // end if postprocess
 
 	// Now actually move all the files
 	FileName fn_old_dir = "";
@@ -1709,9 +1688,7 @@ void PipeLine::replaceFilesForImportExportOfScheduledJobs(FileName fn_in_dir, Fi
 			// Create directory first time round
 			if (ipatt == 0)
 			{
-				FileName dirs = outfile.beforeLastOf("/");
-				command =  "mkdir -p " + dirs;
-				res = system(command.c_str());
+				mktree(outfile.beforeLastOf("/"));
 			}
 			command =  "sed 's|" + find_pattern[ipatt] + "|" + replace_pattern[ipatt] + "|g' < " + infile + " > " + outfile;
 			//std::cerr << " Executing: " << command<<std::endl;
@@ -1729,8 +1706,7 @@ bool PipeLine::exportAllScheduledJobs(std::string mydir, std::string &error_mess
 {
 	// Make sure the directory name ends with a slash
 	mydir += "/";
-	std::string command = "mkdir -p ExportJobs/" + mydir;
-	int res = system(command.c_str());
+	mktree("ExportJobs/" + mydir);
 
 	MetaDataTable MDexported;
 
@@ -1908,10 +1884,14 @@ void PipeLine::read(bool do_lock, std::string lock_message)
 		{
 			if (errno == EACCES) // interestingly, not EACCESS!
 				REPORT_ERROR("ERROR: PipeLine::read cannot create a lock directory " + dir_lock + ". You don't have write permission to this project. If you want to look at other's project directory (but run nothing there), please start RELION with --readonly.");
+			else if (errno == ENOSPC)
+				REPORT_ERROR("ERROR: PipeLine::read cannot create a lock directory " + dir_lock + ". There is not enough space on the disk to do so.");
+			else if (errno == EROFS)
+				REPORT_ERROR("ERROR: PipeLine::read cannot create a lock directory " + dir_lock + ". You are on a read-only file system.");
 
 			// If the lock exists: wait 3 seconds and try again
-			// First time round, print a warning message
-			if (iwait == 0)
+			// Third time round, print a warning message; after 40 tries abort
+			if (iwait == 3)
 			{
 				std::cout << " WARNING: trying to read pipeline.star, but directory " << dir_lock << " exists (which protects against simultaneous writing by multiple instances of the GUI)" << std::endl;
 			}
@@ -1961,28 +1941,60 @@ void PipeLine::read(bool do_lock, std::string lock_message)
 	MDnode.readStar(in, "pipeline_nodes");
 	FOR_ALL_OBJECTS_IN_METADATA_TABLE(MDnode)
 	{
-		std::string name;
+		std::string name, label;
+		// PIPELINER
 		int type;
-		if (!MDnode.getValue(EMDL_PIPELINE_NODE_NAME, name) ||
-			!MDnode.getValue(EMDL_PIPELINE_NODE_TYPE, type)	)
-			REPORT_ERROR("PipeLine::read: cannot find name or type in pipeline_nodes table");
+		if (!MDnode.getValue(EMDL_PIPELINE_NODE_NAME, name) )
+			REPORT_ERROR("PipeLine::read: cannot find name in pipeline_nodes table");
 
-		Node newNode(name, type);
+		if (MDnode.containsLabel(EMDL_PIPELINE_NODE_TYPE_LABEL))
+		{
+			MDnode.getValue(EMDL_PIPELINE_NODE_TYPE_LABEL, label);
+		}
+		else if (MDnode.getValue(EMDL_PIPELINE_NODE_TYPE, type))
+		{
+			label = get_node_label(type);
+		}
+		else
+		{
+			REPORT_ERROR("PipeLine::read: cannot find type in pipeline_nodes table");
+		}
+
+		//Node newNode(name, get_node_type(label));
+		// PIPELINER
+		Node newNode(name, label);
 		nodeList.push_back(newNode);
 	}
 
 	MDproc.readStar(in, "pipeline_processes");
 	FOR_ALL_OBJECTS_IN_METADATA_TABLE(MDproc)
 	{
-		std::string name, alias;
+		std::string name, alias, typeLabel;
 		int type, status;
 		if (!MDproc.getValue(EMDL_PIPELINE_PROCESS_NAME, name) ||
-			!MDproc.getValue(EMDL_PIPELINE_PROCESS_ALIAS, alias) ||
-			!MDproc.getValue(EMDL_PIPELINE_PROCESS_TYPE, type) ||
-			!MDproc.getValue(EMDL_PIPELINE_PROCESS_STATUS, status)	)
-			REPORT_ERROR("PipeLine::read: cannot find name or type in pipeline_processes table");
+			!MDproc.getValue(EMDL_PIPELINE_PROCESS_ALIAS, alias) )
+			REPORT_ERROR("PipeLine::read: cannot find name or alias in pipeline_processes table");
 
-		Process newProcess(name, type, status, alias);
+		if (MDproc.containsLabel(EMDL_PIPELINE_PROCESS_TYPE_LABEL) &&
+				MDproc.containsLabel(EMDL_PIPELINE_PROCESS_STATUS_LABEL))
+		{
+			MDproc.getValue(EMDL_PIPELINE_PROCESS_TYPE_LABEL, typeLabel);
+			type = get_proc_type(typeLabel);
+            std::string label;
+            MDproc.getValue(EMDL_PIPELINE_PROCESS_STATUS_LABEL, label);
+			status = procstatus_label2type.at(label);
+		}
+		else if (MDproc.getValue(EMDL_PIPELINE_PROCESS_TYPE, type) &&
+			MDproc.getValue(EMDL_PIPELINE_PROCESS_STATUS, status)	)
+        {
+            typeLabel = get_proc_label(type);
+        }
+        else
+		{
+			REPORT_ERROR("PipeLine::read: cannot find type or status in pipeline_processes table");
+		}
+
+		Process newProcess(name, typeLabel, type, status, alias);
 		processList.push_back(newProcess);
 
 		// Make a symbolic link to the alias if it isn't there...
@@ -2000,7 +2012,7 @@ void PipeLine::read(bool do_lock, std::string lock_message)
 				//std::string command = " ln -s ../" + name + " " + fn_alias;
 				//int res= system(command.c_str());
 				std::string path1 = "../" + name;
-				int res = symlink(path1.c_str(), fn_alias.c_str());
+				symlink(path1, fn_alias);
 			}
 		}
 	}
@@ -2150,21 +2162,23 @@ void PipeLine::write(bool do_lock, FileName fn_del, std::vector<bool> deleteNode
 	MDproc_del.setName("pipeline_processes");
 	for(long int i=0 ; i < processList.size() ; i++)
 	{
-		if (fn_del == "" || !deleteProcess[i])
+
+
+        if (fn_del == "" || !deleteProcess[i])
 		{
-			MDproc.addObject();
+            MDproc.addObject();
 			MDproc.setValue(EMDL_PIPELINE_PROCESS_NAME, processList[i].name);
 			MDproc.setValue(EMDL_PIPELINE_PROCESS_ALIAS, processList[i].alias);
-			MDproc.setValue(EMDL_PIPELINE_PROCESS_TYPE, processList[i].type);
-			MDproc.setValue(EMDL_PIPELINE_PROCESS_STATUS, processList[i].status);
+			MDproc.setValue(EMDL_PIPELINE_PROCESS_TYPE_LABEL, processList[i].typeLabel);
+			MDproc.setValue(EMDL_PIPELINE_PROCESS_STATUS_LABEL, procstatus_type2label.at(processList[i].status));
 		}
 		else
 		{
 			MDproc_del.addObject();
 			MDproc_del.setValue(EMDL_PIPELINE_PROCESS_NAME, processList[i].name);
 			MDproc_del.setValue(EMDL_PIPELINE_PROCESS_ALIAS, processList[i].alias);
-			MDproc_del.setValue(EMDL_PIPELINE_PROCESS_TYPE, processList[i].type);
-			MDproc_del.setValue(EMDL_PIPELINE_PROCESS_STATUS, processList[i].status);
+			MDproc_del.setValue(EMDL_PIPELINE_PROCESS_TYPE_LABEL, processList[i].typeLabel);
+			MDproc_del.setValue(EMDL_PIPELINE_PROCESS_STATUS_LABEL, procstatus_type2label.at(processList[i].status));
 		}
 
 	}
@@ -2183,14 +2197,17 @@ void PipeLine::write(bool do_lock, FileName fn_del, std::vector<bool> deleteNode
 		{
 			MDnode.addObject();
 			MDnode.setValue(EMDL_PIPELINE_NODE_NAME, nodeList[i].name);
-			MDnode.setValue(EMDL_PIPELINE_NODE_TYPE, nodeList[i].type);
+			//MDnode.setValue(EMDL_PIPELINE_NODE_TYPE_LABEL, get_node_label(nodeList[i].type));
+			// PIPELINER
+			MDnode.setValue(EMDL_PIPELINE_NODE_TYPE_LABEL, nodeList[i].type);
 		}
 		else
 		{
 			MDnode_del.addObject();
 			MDnode_del.setValue(EMDL_PIPELINE_NODE_NAME, nodeList[i].name);
-			MDnode_del.setValue(EMDL_PIPELINE_NODE_TYPE, nodeList[i].type);
-
+			//MDnode_del.setValue(EMDL_PIPELINE_NODE_TYPE_LABEL, get_node_label(nodeList[i].type));
+			// PIPELINER
+			MDnode_del.setValue(EMDL_PIPELINE_NODE_TYPE_LABEL, nodeList[i].type);
 		}
 	}
 #ifdef DEBUG
@@ -2280,481 +2297,4 @@ void PipeLine::write(bool do_lock, FileName fn_del, std::vector<bool> deleteNode
 
 	// Touch a file to indicate to the GUI that the pipeline has just changed
 	touch(PIPELINE_HAS_CHANGED);
-}
-
-std::string PipeLineFlowChart::getDownwardsArrowLabel(PipeLine &pipeline, long int lower_process, long int upper_process)
-{
-	// What is the type of the node between upper_process and lower_process?
-	bool is_found = false;
-	long int mynode = -1;
-	for (long int i = 0; i < pipeline.processList[lower_process].inputNodeList.size(); i++)
-	{
-		long int inode= pipeline.processList[lower_process].inputNodeList[i];
-		// Find this one in the outputNodeList of the upper_process
-		if (pipeline.nodeList[inode].outputFromProcess == upper_process)
-		{
-			is_found = true;
-			mynode = inode;
-			break;
-		}
-	}
-
-	if (!is_found)
-		REPORT_ERROR("PipeLineFlowChart::getDownwardsArrowLabel ERROR: cannot find node connecting " + pipeline.processList[upper_process].name + " -> " + pipeline.processList[lower_process].name);
-
-	std::string mylabel = "";
-	MetaDataTable MD;
-	long int nr_obj;
-
-	switch (pipeline.nodeList[mynode].type)
-	{
-		case NODE_MOVIES:
-		{
-			nr_obj = MD.read(pipeline.nodeList[mynode].name, "", true); // true means: only count nr entries;
-			mylabel = integerToString(nr_obj) + " movies";
-			break;
-		}
-		case NODE_MICS:
-		{
-			nr_obj = MD.read(pipeline.nodeList[mynode].name, "", true); // true means: only count nr entries;
-			mylabel = integerToString(nr_obj) + " micrographs";
-			break;
-		}
-		case NODE_PART_DATA:
-		{
-			nr_obj = MD.read(pipeline.nodeList[mynode].name, "", true); // true means: only count nr entries;
-			mylabel = integerToString(nr_obj) + " particles";
-			break;
-		}
-		case NODE_2DREFS:
-		{
-			mylabel = "2Drefs";
-			break;
-		}
-		case NODE_3DREF:
-		{
-			mylabel = "3D ref";
-			break;
-		}
-		case NODE_MASK:
-		{
-			mylabel = "mask";
-			break;
-		}
-		case NODE_MODEL:
-		{
-			nr_obj = MD.read(pipeline.nodeList[mynode].name, "model_classes", true); // true means: only count nr entries;
-			mylabel = integerToString(nr_obj) + " classes";
-			break;
-		}
-		case NODE_OPTIMISER:
-		{
-			mylabel = "continue";
-			break;
-		}
-		case NODE_HALFMAP:
-		{
-			mylabel = "half-map";
-			break;
-		}
-		case NODE_FINALMAP:
-		{
-			mylabel = "final map";
-			break;
-		}
-		case NODE_RESMAP:
-		{
-			mylabel = "local-res map";
-			break;
-		}
-		default:
-		{
-			mylabel = "";
-			break;
-		}
-	}
-
-	return mylabel;
-}
-
-void PipeLineFlowChart::adaptNamesForTikZ(FileName &name)
-{
-	name.replaceAllSubstrings((std::string)"_", (std::string)"\\_");
-	name.replaceAllSubstrings((std::string)".", (std::string)"-");
-	name.replaceAllSubstrings((std::string)",", (std::string)"-");
-	name.replaceAllSubstrings((std::string)"^", (std::string)"\\textasciicircum ");
-	name.replaceAllSubstrings((std::string)"~", (std::string)"\\textasciitilde ");
-}
-
-long int PipeLineFlowChart::addProcessToUpwardsFlowChart(std::ofstream &fh, PipeLine &pipeline,
-		long int lower_process, long int new_process, std::vector<long int> &branched_procs)
-{
-	branched_procs.clear();
-	FileName procname;
-	if (pipeline.processList[new_process].alias != "None")
-		procname = pipeline.processList[new_process].alias;
-	else
-    	procname = pipeline.processList[new_process].name;
-
-	if (do_short_names)
-		procname = procname.beforeFirstOf("/");
-	else
-	{
-		FileName longname = (procname.afterFirstOf("/")).beforeLastOf("/");
-		adaptNamesForTikZ(longname);
-		procname = procname.beforeFirstOf("/") + "\\\\" + longname;
-	}
-
-	FileName new_nodename= pipeline.processList[new_process].name;
-	adaptNamesForTikZ(new_nodename);
-	FileName lower_nodename;
-
-	// First put the box of the process
-	// If this is the lowest process, don't use "above-of" statement, and don't draw an arrow
-	if (lower_process < 0)
-	{
-			fh << "\\node [block] (" << new_nodename << ") {" << procname << "};" << std::endl;
-	}
-	else
-	{
-		lower_nodename = pipeline.processList[lower_process].name;
-		adaptNamesForTikZ(lower_nodename);
-
-		fh << "\\node [block, above of="<< lower_nodename <<"] (" << new_nodename << ") {" << procname << "};" << std::endl;
-		std::string mylabel = getDownwardsArrowLabel(pipeline, lower_process, new_process);
-		// Make an arrow from the box to the node it came from
-		fh << "\\path [line] ("<< new_nodename <<") -- node[right] {" << mylabel << "} ("<< lower_nodename <<");" << std::endl;
-	}
-
-	// See if there are any branchings side-wards, e.g. masks, 2D/3D references, coords, model, optimiser, etc
-	long int result = -1;
-	if (pipeline.processList[new_process].inputNodeList.size() == 0)
-	{
-		// Reached the top of the tree!
-		return -1;
-	}
-	if (pipeline.processList[new_process].inputNodeList.size() > 1)
-	{
-
-		std::string rightname, leftname;
-		for (int inode = 0; inode < pipeline.processList[new_process].inputNodeList.size(); inode++)
-		{
-			bool is_left = false;
-			bool is_right = false;
-			bool is_upper_left = false;
-			bool is_upper_right = false;
-			std::string right_label="", left_label="";
-
-			long int inputnode = pipeline.processList[new_process].inputNodeList[inode];
-			int mynodetype = pipeline.nodeList[inputnode].type;
-
-	        if (pipeline.processList[new_process].type == PROC_AUTOPICK)
-	        {
-	        	is_right = (mynodetype == NODE_2DREFS);
-	        	right_label="2D refs";
-	        }
-	        else if (pipeline.processList[new_process].type == PROC_EXTRACT)
-	        {
-
-	        	// If the coordinates come from NODE_MIC_COORDS, then straight up is the CTF info
-	        	// If the coordinates come from NODE_PART_DATA, then that should be straight up
-	        	// therefore first check whether this node has NODE_PART_DATA input
-	        	bool has_part_data = false;
-	        	for (int inode2 = 0; inode2 < pipeline.processList[new_process].inputNodeList.size(); inode2++)
-	        	{
-	    			long int inputnode2 = pipeline.processList[new_process].inputNodeList[inode2];
-	    			if (pipeline.nodeList[inputnode2].type == NODE_PART_DATA)
-	    			{
-	    				has_part_data = true;
-	    				break;
-	    			}
-	        	}
-	        	if (has_part_data)
-	        	{
-	        		is_right = (mynodetype == NODE_MICS);
-	        		right_label = "mics";
-	        	}
-	        	else
-	        	{
-					is_right = (mynodetype == NODE_MIC_COORDS);
-					right_label = "coords";
-	        	}
-	        }
-	        else if (pipeline.processList[new_process].type == PROC_3DCLASS)
-	        {
-	        	is_right = (mynodetype == NODE_3DREF);
-	        	right_label = "3D ref";
-	        	is_left = (mynodetype == NODE_MASK);
-	        	left_label = "mask";
-	        }
-	        else if (pipeline.processList[new_process].type == PROC_3DAUTO)
-	        {
-	        	is_right = (mynodetype == NODE_3DREF);
-	        	right_label = "3D ref";
-	        	is_left = (mynodetype == NODE_MASK);
-	        	left_label = "mask";
-	        }
-	        else if (pipeline.processList[new_process].type == PROC_JOINSTAR)
-	        {
-	        	// For joinstar: there will be no parent process that returns a postive value!
-	        	// Thereby, joinstar will always end in the 2-4 input processes, each of for which a new flowchart will be made on a new tikZpicture
-	        	if (mynodetype == NODE_MOVIES)
-	        		right_label = left_label = "mics";
-	        	else if (mynodetype == NODE_PART_DATA)
-	        		right_label = left_label = "parts";
-	        	is_right = (inode == 0);
-	        	is_left = (inode == 1);
-	        	is_upper_right = (inode == 2);
-	        	is_upper_left = (inode == 3);
-	        }
-	        else if (pipeline.processList[new_process].type == PROC_SUBTRACT)
-	        {
-	        	is_right = (mynodetype == NODE_3DREF);
-	        	right_label = "3D ref";
-	        	is_left = (mynodetype == NODE_MASK);
-	        	left_label = "mask";
-	        }
-	        else if (pipeline.processList[new_process].type == PROC_POST)
-	        {
-	        	is_left = (mynodetype == NODE_MASK);
-	        	left_label = "mask";
-	        }
-	        else if (pipeline.processList[new_process].type == PROC_RESMAP)
-	        {
-	        	is_left = (mynodetype == NODE_MASK);
-	        	left_label = "mask";
-	        }
-
-			if (is_right || is_left || is_upper_right || is_upper_left)
-			{
-				FileName hyperrefname;
-				FileName parent_nodename, newprocname;
-				long int parent_process = pipeline.nodeList[inputnode].outputFromProcess;
-				if (parent_process < 0)
-				{
-					std::cout << " WARNING: cannot get parent of node: " << pipeline.nodeList[inputnode].name << std::endl;
-					parent_nodename = (is_right || is_upper_right) ? new_nodename + "_rigth" : new_nodename + "_left";
-					newprocname = "unknown";
-				}
-				else
-				{
-					// Keep track of all the side-wards branches
-					branched_procs.push_back(parent_process);
-					if (pipeline.processList[parent_process].alias != "None")
-						newprocname = pipeline.processList[parent_process].alias;
-					else
-						newprocname = pipeline.processList[parent_process].name;
-					if (do_short_names)
-						newprocname = newprocname.beforeFirstOf("/");
-					else
-					{
-						FileName longname2 = (newprocname.afterFirstOf("/")).beforeLastOf("/");
-						adaptNamesForTikZ(longname2);
-						hyperrefname = "sec:" + newprocname.beforeFirstOf("/") + "/" + longname2;
-						if (pipeline.processList[parent_process].type==PROC_IMPORT)
-							newprocname = newprocname.beforeFirstOf("/") + "\\\\" + longname2;
-						else
-							newprocname = " \\hyperlink{" + hyperrefname + "}{" + newprocname.beforeFirstOf("/") + "}\\\\" + longname2;
-					}
-
-					parent_nodename = pipeline.processList[parent_process].name;
-					adaptNamesForTikZ(parent_nodename);
-					std::string labelpos;
-					if (is_right)
-						rightname = parent_nodename;
-					if (is_left)
-						leftname = parent_nodename;
-				}
-
-				if (is_right || is_left)
-				{
-					std::string pos = (is_right) ? "right" : "left";
-					fh << "\\node [block2, "<< pos<<" of="<< new_nodename<<"] (" << parent_nodename << ") {" << newprocname << "};" << std::endl;
-				}
-				else if (is_upper_right || is_upper_left)
-				{
-					std::string abovename = (is_upper_right) ? rightname : leftname;
-					fh << "\\node [block2b, above of="<< abovename <<"] (" << parent_nodename << ") {" << newprocname << "};" << std::endl;
-				}
-
-				// Make an arrow from the box to the process it came from
-				std::string arrowlabel = (is_right || is_upper_right) ? right_label : left_label;
-				fh << "\\path [line] ("<< parent_nodename <<") -- node[above] {" << arrowlabel << "} ("<< new_nodename <<");" << std::endl;
-			}
-			else
-				result = pipeline.nodeList[inputnode].outputFromProcess;
-		}
-
-		return result;
-	}
-	else
-	{
-		// Only a single input node: return the process that one came from
-		long int inputnode = pipeline.processList[new_process].inputNodeList[0];
-		return pipeline.nodeList[inputnode].outputFromProcess;
-	}
-}
-
-void PipeLineFlowChart::makeOneUpwardsFlowChart(std::ofstream &fh, PipeLine &pipeline, long int from_process,
-		std::vector<long int> &all_branches, bool is_main_flow)
-{
-	openTikZPicture(fh, is_main_flow);
-	long int prev_process = -1;
-	long int current_process = from_process;
-	bool do_stop = false;
-	int counter = 0;
-	while (!do_stop)
-	{
-
-		std::vector<long int> branched_procs;
-		long int next_process = addProcessToUpwardsFlowChart(fh, pipeline, prev_process, current_process, branched_procs);
-
-		if (counter > 10)
-		{
-			closeTikZPicture(fh, false);
-			counter = 0;
-			next_process = current_process;
-			current_process = prev_process;
-			prev_process = -1;
-			openTikZPicture(fh, false);
-		}
-
-		if (next_process < 0)
-		{
-			do_stop = true;
-		}
-		else
-		{
-			prev_process = current_process;
-			current_process = next_process;
-		}
-
-		// See if there are any new branches, and if so add them to the all_branches vector
-		if (do_branches)
-		{
-			for (int i = 0; i <  branched_procs.size(); i++)
-			{
-				long int mybranch = branched_procs[i];
-				bool already_exists= false;
-				for (int j = 0; j < all_branches.size(); j++)
-				{
-					if (all_branches[j] == mybranch)
-					{
-						already_exists = true;
-						break;
-					}
-				}
-				if (!already_exists && pipeline.processList[mybranch].type != PROC_IMPORT)
-				{
-					all_branches.push_back(mybranch);
-				}
-			}
-		}
-
-		counter++;
-
-	}
-	closeTikZPicture(fh, is_main_flow);
-}
-
-void PipeLineFlowChart::makeAllUpwardsFlowCharts(FileName &fn_out, PipeLine &pipeline, long int from_process)
-{
-	std::ofstream fh;
-	openFlowChartFile(fn_out, fh);
-
-	// At the beginning of the flowchart file, first make an overview flowchart with short names
-	do_short_names = true;
-	do_branches = false;
-	FileName myorititle = (pipeline.processList[from_process].alias != "None") ?
-			pipeline.processList[from_process].alias : pipeline.processList[from_process].name;
-	myorititle=myorititle.beforeLastOf("/");
-	adaptNamesForTikZ(myorititle);
-	fh << "\\section*{Overview flowchart for " << myorititle << "}" << std::endl;
-	std::vector<long int> dummy;
-	makeOneUpwardsFlowChart(fh, pipeline, from_process, dummy, true);
-
-	// Then, make fully branched flowcharts below
-	do_short_names = false;
-	do_branches = true;
-	std::vector<long int> all_branches;
-	int i = 0;
-	all_branches.push_back(from_process);
-	while (i < all_branches.size())
-	{
-		FileName mytitle = (pipeline.processList[all_branches[i]].alias != "None") ? pipeline.processList[all_branches[i]].alias : pipeline.processList[all_branches[i]].name;
-		mytitle=mytitle.beforeLastOf("/");
-		adaptNamesForTikZ(mytitle);
-		if (i == 0)
-		{
-			std::cout << " Making main branched flowchart ... " <<std::endl;
-			fh << "\\section*{Branched flowchart for " << mytitle << "}" << std::endl;
-		}
-		else
-		{
-			std::cout << " Making flowchart for branch: " << integerToString(i) << " ... " << std::endl;
-			std::string hypertarget = "sec:" + mytitle;
-			fh << "\\subsection*{Flowchart for branch " << integerToString(i)<< ": "<< mytitle << "\\hypertarget{"<<hypertarget<<"}{}}" << std::endl;
-		}
-
-		makeOneUpwardsFlowChart(fh, pipeline, all_branches[i], all_branches, (i==0) );
-
-		i++;
-	}
-
-
-	closeFlowChartFile(fh);
-}
-
-void PipeLineFlowChart::openTikZPicture(std::ofstream &fh, bool is_main_flow)
-{
-	if (is_main_flow)
-	{
-		fh << "% For large flowcharts: try reducing the fraction on the next line." << std::endl;
-		fh << "\\resizebox{!}{0.75\\textheight}{" << std::endl;
-	}
-	fh << "\\begin{tikzpicture}[scale=1, auto]" << std::endl;
-	// Override the long-name styles with the shorter ones
-	if (do_short_names)
-	{
-		fh << "\\tikzstyle{block} = [rectangle, draw, fill=white,text width=2.5cm, node distance = 1.6cm, text centered, rounded corners, minimum height=0.8cm]" << std::endl;
-		fh << "\\tikzstyle{block2} = [rectangle, draw, fill=white,text width=2.5cm, node distance = 4cm, text centered, rounded corners, minimum height=0.8cm]" << std::endl;
-		fh << "\\tikzstyle{block2b} = [rectangle, draw, fill=white,text width=2.5cm, node distance = 1.6cm, text centered, rounded corners, minimum height=0.8cm]" << std::endl;
-	}
-}
-
-void PipeLineFlowChart::closeTikZPicture(std::ofstream &fh, bool is_main_flow)
-{
-	fh << "\\end{tikzpicture}" << std::endl;
-	if (is_main_flow)
-	{
-		fh << "% For large flowcharts: close resizebox here..." << std::endl;
-		fh << "}" << std::endl; // closes resizebox
-	}
-}
-
-void PipeLineFlowChart::openFlowChartFile(FileName &fn_out, std::ofstream &fh)
-{
-
-	fh.open((fn_out).c_str(), std::ios::out);
-	if (!fh)
-		REPORT_ERROR( (std::string)"PipeLineFlowChart ERROR: Cannot write to file: " + fn_out);
-
-	// Set up the LaTex header
-	fh << "\\documentclass{article}" << std::endl;
-	fh << "\\usepackage{tikz,hyperref}" << std::endl;
-	fh << "\\usetikzlibrary{shapes,arrows}" << std::endl;
-	fh << "\\begin{document}" << std::endl;
-	// These are the styles for the long names!
-	fh << "\\tikzstyle{block} = [rectangle, draw, fill=white,text width=3.5cm, node distance = 1.8cm, text centered, rounded corners]" << std::endl;
-	fh << "\\tikzstyle{block2} = [rectangle, draw, fill=blue!20,text width=3.5cm, node distance = 5cm, text centered, rounded corners]" << std::endl;
-	fh << "\\tikzstyle{block2b} = [rectangle, draw, fill=blue!20,text width=3.5cm, node distance = 1.8cm, text centered, rounded corners]" << std::endl;
-
-
-	fh << "\\tikzstyle{line} = [draw, very thick, color=black!50, -latex']" << std::endl << std::endl;
-}
-
-void PipeLineFlowChart::closeFlowChartFile(std::ofstream &fh)
-{
-	fh << "\\end{document}" << std::endl;
-	fh.close();
 }

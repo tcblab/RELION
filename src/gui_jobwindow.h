@@ -36,6 +36,9 @@ public:
 	// Which job is this for?
 	RelionJob myjob;
 
+	// Is this for tomo?
+	bool is_tomo;
+
 	// All the GuiEntries of this job
 	std::map<std::string, GuiEntry> guientries;
 
@@ -68,7 +71,7 @@ public:
 	// set up the tabs
 	void setupTabs(int nr_tabs);
 
-	void initialise(int my_job_type);
+	void initialise(int my_job_type, bool _is_tomo = false);
 
 	void resetHeight();
 
@@ -125,6 +128,15 @@ private:
 	void initialiseMotionrefineWindow();
 	void initialiseCtfrefineWindow();
 	void initialiseExternalWindow();
+
+	// relion-3.2: add subtomogram averaging programs by Jasenko
+	void placeTomoInput(bool has_tomograms, bool has_particles,
+						bool has_trajectories, bool has_manifolds, bool has_halfmaps, bool has_postprocess);
+	void initialiseTomoImportWindow();
+	void initialiseTomoSubtomoWindow();
+	void initialiseTomoCtfRefineWindow();
+	void initialiseTomoAlignWindow();
+	void initialiseTomoReconParWindow();
 
 };
 

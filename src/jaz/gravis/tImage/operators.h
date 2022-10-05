@@ -28,7 +28,7 @@
 #ifndef __GRAVIS__IMAGE_OPERATORS__
 #define __GRAVIS__IMAGE_OPERATORS__
 
-#include <gravis/tImage.h>
+#include <src/jaz/gravis/tImage.h>
 
 namespace gravis
 {

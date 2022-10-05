@@ -2473,7 +2473,7 @@ public:
      *
      * As RFLOATs.
      */
-    void computeDoubleMinMax(RFLOAT& minval, RFLOAT& maxval) const
+    void computeDoubleMinMax(RFLOAT& minval, RFLOAT& maxval, MultidimArray<int> *mask = NULL) const
     {
         if (NZYXSIZE(*this) <= 0)
             return;
@@ -2484,11 +2484,14 @@ public:
         long int n;
         FOR_ALL_DIRECT_ELEMENTS_IN_MULTIDIMARRAY_ptr(*this,n,ptr)
         {
-            T val=*ptr;
-            if (val < minval)
-                minval = static_cast< RFLOAT >(val);
-            else if (val > maxval)
-                maxval = static_cast< RFLOAT >(val);
+        	if ((mask == NULL) || (DIRECT_MULTIDIM_ELEM(*mask,n) > 0) )
+        	{
+				T val=*ptr;
+				if (val < minval)
+					minval = static_cast< RFLOAT >(val);
+				else if (val > maxval)
+					maxval = static_cast< RFLOAT >(val);
+        	}
         }
     }
 
@@ -2518,12 +2521,12 @@ public:
      * The returned value is always RFLOAT, independently of the type of the
      * array.
      */
-    RFLOAT computeStddev() const
+    void computeAvgStddev(RFLOAT &avg, RFLOAT &stddev) const
     {
         if (NZYXSIZE(*this) <= 1)
-            return 0;
+            return;
 
-        RFLOAT avg = 0, stddev = 0;
+        avg = 0, stddev = 0;
 
         T* ptr=NULL;
         long int n;
@@ -2547,6 +2550,71 @@ public:
         FOR_ALL_DIRECT_ELEMENTS_IN_MULTIDIMARRAY_ptr(*this,n,ptr)
         {
         	RFLOAT val=static_cast< RFLOAT >(*ptr);
+            stddev += (val - avg) * (val - avg);
+        }
+
+        if (NZYXSIZE(*this) > 1)
+        {
+            stddev = stddev / (NZYXSIZE(*this) - 1);
+            // Foreseeing numerical instabilities
+            stddev = sqrt(static_cast< RFLOAT >(ABS(stddev)));
+        }
+        else
+            stddev = 0;
+
+#else
+        FOR_ALL_DIRECT_ELEMENTS_IN_MULTIDIMARRAY_ptr(*this,n,ptr)
+        {
+            RFLOAT val=static_cast< RFLOAT >(*ptr);
+            avg += val;
+            stddev += val * val;
+        }
+        avg /= NZYXSIZE(*this);
+
+        if (NZYXSIZE(*this) > 1)
+        {
+            stddev = stddev / NZYXSIZE(*this) - avg * avg;
+            stddev *= NZYXSIZE(*this) / (NZYXSIZE(*this) - 1);
+
+            // Foreseeing numerical instabilities
+            stddev = sqrt(static_cast< RFLOAT >(ABS(stddev)));
+        }
+        else
+            stddev = 0;
+#endif
+
+        return;
+    }
+
+    RFLOAT computeStddev() const
+    {
+        if (NZYXSIZE(*this) <= 1)
+            return 0;
+
+        RFLOAT avg = 0, stddev = 0;
+
+        T* ptr=NULL;
+        long int n;
+
+
+#ifdef RELION_SINGLE_PRECISION
+        // Two-passes through the data, as single-precision is not enough for a single-pass
+        // Also: averages of large arrays will give trouble: computer median first....
+        RFLOAT median = 0.;
+        if (NZYXSIZE(*this) > 1e6)
+                median = computeMedian();
+
+        FOR_ALL_DIRECT_ELEMENTS_IN_MULTIDIMARRAY_ptr(*this,n,ptr)
+        {
+                RFLOAT val=static_cast< RFLOAT >(*ptr);
+                avg += val - median;
+        }
+        avg /= NZYXSIZE(*this);
+        avg += median;
+
+        FOR_ALL_DIRECT_ELEMENTS_IN_MULTIDIMARRAY_ptr(*this,n,ptr)
+        {
+                RFLOAT val=static_cast< RFLOAT >(*ptr);
             stddev += (val - avg) * (val - avg);
         }
 
@@ -3997,6 +4065,54 @@ public:
         *ptr = static_cast< T >(log10(static_cast< RFLOAT >(*ptr)));
     }
 
+    /** Calculate entropy */
+    double entropy(MultidimArray<int> *mask = NULL)
+    {
+
+    	if (mask != NULL)
+    		if (!sameShape(*mask)) REPORT_ERROR("ERROR: mask is of incorrect size");
+
+    	RFLOAT minval, maxval;
+    	computeDoubleMinMax(minval, maxval, mask);
+    	double range = maxval - minval;
+
+    	if (range < 1e-20)
+    		return 0.;
+
+    	double hist[128] = {};
+        double sum = 0.;
+        T* ptr=NULL;
+        long int n;
+        FOR_ALL_DIRECT_ELEMENTS_IN_MULTIDIMARRAY_ptr(*this,n,ptr)
+    	{
+    		if (mask == NULL || DIRECT_MULTIDIM_ELEM(*mask, n) > 0)
+    		{
+				int norm = floor(((static_cast<double>(DIRECT_MULTIDIM_ELEM(*this, n)) - minval) * 127.0) / range);
+				hist[norm]+= 1.;
+				sum += 1.;
+    		}
+    	}
+
+        // Make minimum histogram value one to avoid log(0), and calculate total sum
+        for (int i = 0; i < 128; i++)
+        	if (hist[i] < 1.)
+        	{
+        		sum += 1.;
+        		hist[i] += 1.;
+        	}
+
+        // Then calculate entropy
+        double entropy = 0;
+        for (int i = 0; i < 128; i++)
+        {
+        	double p = hist[i] / sum;
+        	entropy -= p * log2(p);
+        }
+        return entropy;
+
+    }
+
+
     /** Reverse matrix values over X axis, keep in this object.
      *
      * Maybe better with an example:
@@ -4483,8 +4599,10 @@ std::ostream& operator<< (std::ostream& ostrm, const MultidimArray<T>& v)
     if (YSIZE(v)==1 && ZSIZE(v)==1)
     {
         for (long int j = STARTINGX(v); j <= FINISHINGX(v); j++)
-            ostrm << floatToString((RFLOAT) A3D_ELEM(v, 0, 0, j), 10, prec)
-            << std::endl;
+        {
+        	ostrm << floatToString((RFLOAT) A3D_ELEM(v, 0, 0, j), 10, prec)<<" ";
+        }
+        ostrm << std::endl;
     }
     else
     {

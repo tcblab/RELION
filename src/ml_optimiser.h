@@ -21,8 +21,6 @@
 #ifndef ML_OPTIMISER_H_
 #define ML_OPTIMISER_H_
 
-#include <pthread.h>
-
 #ifdef ALTCPU
 	#include <tbb/enumerable_thread_specific.h>
 	#include <complex>
@@ -89,6 +87,7 @@
 #define WIDTH_FMASK_EDGE 2.
 #define MAX_NR_ITER_WO_RESOL_GAIN 1
 #define MAX_NR_ITER_WO_LARGE_HIDDEN_VARIABLE_CHANGES 1
+#define MAX_NR_ITER_WO_RESOL_GAIN_GRAD 4
 
 // for profiling
 //#define TIMING
@@ -140,6 +139,12 @@ public:
 
 	// Filename for input reference images (stack, star or image)
 	FileName fn_ref;
+
+	// Filename for the subtomo optimiser set. Used to set fn_data, fn_ref and fn_mask
+	FileName fn_OS;
+
+	// Optimiser set table for subtomo
+	MetaDataTable optimisationSet;
 
 	// Generate a 3D model from 2D particles de novo?
 	bool is_3d_model;
@@ -225,6 +230,9 @@ public:
 	// Flag whether to use the auto-refine procedure
 	bool do_auto_refine;
 
+	// Flag whether to use auto-sampling (outside auto_refine)
+	bool do_auto_sampling;
+
 	// Flag whether to ignore changes in hidden variables in auto-refine (which makes it faster)
 	bool auto_ignore_angle_changes;
 
@@ -304,6 +312,9 @@ public:
 	// Minimum resolution to perform Bayesian estimates of the model
 	int minres_map;
 
+	// Abort when resolution reaches beyond this value
+	float abort_at_resolution;
+
 	// Flag to flatten solvent
 	bool do_solvent;
 
@@ -327,59 +338,99 @@ public:
 	// Number of particles to be processed simultaneously
 	int nr_pool;
 
-	//////////////// Stochastic gradient descent
-	bool do_sgd;
+	//////////////// Gradient optimisation
+	// If current refinement is gradient based
+	bool gradient_refine;
 
-	// Avoid problems with SGD patent in cryoSPARC: don't accumulate gradient, but do minibatch maximisation steps instead
-	bool do_avoid_sgd;
+	// Id current iteration is gradient based
+	bool do_grad;
+	bool do_grad_next_iter;
 
-	// Number of initial iterations at low resolution, and without annealing of references
-	int sgd_ini_iter;
+	// Do pseudo half-sets to estimate noise
+	bool grad_pseudo_halfsets;
 
-	// Number of final iterations at high resolution, and without annealing of reference
-	int sgd_fin_iter;
+	// Number of iterations at the end of a gradient refinement using Expectation-Maximization
+	int grad_em_iters;
+
+	// Number of iterations in the initial phase of refinement
+	int grad_ini_iter;
+
+	// Fraction of iterations in the initial phase of refinement
+	RFLOAT grad_ini_frac;
+
+	// Number of iterations in the final phase of refinement
+	int grad_fin_iter;
+
+	// Fraction of iterations in the initial phase of refinement
+	RFLOAT grad_fin_frac;
 
 	// Number of iterations between the initial and the final ones
-	// (during which a linear transform from sgd_ini_resol->sgd_fin_resol and sgd_ini_subset_size->sgd_fin_subset_size will be done)
-	int sgd_inbetween_iter;
+	// (during which a linear transform from grad_ini_resol->grad_fin_resol and grad_ini_subset_size->grad_fin_subset_size will be done)
+	int grad_inbetween_iter;
 
 	// Size of the subsets used in the initial iterations
-	int sgd_ini_subset_size;
+	int grad_ini_subset_size;
 
 	//Size of the subsets used in the final iterations
-	int sgd_fin_subset_size;
+	int grad_fin_subset_size;
+
+	// Effective size of subsets
+	int effective_setsize;
+
+	// Adjusting the under-estimation of signal of low-resolution components during gradient optimization to this resolution
+	RFLOAT grad_min_resol;
 
 	// The resolution in the initial iterations
-	RFLOAT sgd_ini_resol; // in A
+	RFLOAT grad_ini_resol; // in A
 
 	// The resolution in the final iterations
-	RFLOAT sgd_fin_resol; // in A
+	RFLOAT grad_fin_resol; // in A
 
 	// Skip annealing of multiple reference in SGD
-	// (by default refs are kept the same during sgd_nr_iter_initial and then slowly annealed during sgd_nr_iter_inbetween)
-	bool do_sgd_skip_anneal;
+	// (by default refs are kept the same during grad_nr_iter_initial and then slowly annealed during grad_nr_iter_inbetween)
+	bool do_grad_skip_anneal;
 
 	// Momentum update parameter
 	RFLOAT mu;
 
 	// Step size of the gradient updates
-	RFLOAT sgd_stepsize;
+	RFLOAT grad_stepsize;
+	RFLOAT grad_current_stepsize;
+	std::string grad_stepsize_scheme;
+
+	// For automated adjusting of tau2 fudge
+	std::string tau2_fudge_scheme;
+	RFLOAT tau2_fudge_arg;
+
+	// Self-organizing map
+	bool do_init_blobs;
+	bool do_som;
+	bool is_som_iter;
+	int som_starting_nodes;
+	float som_connectivity;
+	float som_neighbour_pull;
+	float som_inactivity_threshold;
+
+	float class_inactivity_threshold;
 
 	// Size of the random subsets
 	long int subset_size;
 
+	// Automatic doubling of subset size during auto refinement
+	// Usage: subset_size = grad_ini_subset * 2 ^ auto_subest_size_order
+	int auto_subset_size_order;
+
+	// Gradient auto refinement has converged
+	bool grad_has_converged;
+
+	// Suspended finer sampling for this many iteration
+	int grad_suspended_finer_sampling_iter;
+
+	// Suspended finer sampling with local searches for this many iteration
+	int grad_suspended_local_searches_iter;
+
 	// Every how many iterations should be written to disk when using subsets
-	int write_every_sgd_iter;
-
-	// Number of particles at which initial sigma2_fudge is reduced by 50%
-	long int sgd_sigma2fudge_halflife;
-
-	// Initial sigma2fudge for SGD
-	RFLOAT sgd_sigma2fudge_ini;
-
-	// derived from the above, so not given by user:
-	int sgd_inires_pix; // resolution in pixels at beginning of SGD
-	int sgd_finres_pix; // resolution in pixels at end of SGD
+	int write_every_grad_iter;
 
 	// Use subsets like in cisTEM to speed up 2D/3D classification
 	bool do_fast_subsets;
@@ -469,6 +520,9 @@ public:
 
 	/* Flag to use bimodal prior distributions on psi (2D classification of helical segments) */
 	bool do_bimodal_psi;
+
+	/* Flag to center classes */
+	bool do_center_classes;
 
 	//////// Special stuff for the first iterations /////////////////
 
@@ -578,6 +632,17 @@ public:
 	// Just count how often the optimal changes are summed
 	RFLOAT sum_changes_count;
 
+	///////// Special stuff for subtomogram avg //////////
+
+	// Do CTF3D files contain CTF^2 or not?
+	bool ctf3d_squared;
+	// Apply regular Probability and Noise estimation
+	bool do_skip_subtomo_correction;
+	// Have subtomogram files been multiplicity normalised during reconstruction?
+	bool normalised_subtomos;
+	// Threshold applied to multiplicity volume to mask edge voxels
+	RFLOAT subtomo_multi_thr;
+
 	/////////// Some internal stuff ////////////////////////
 
 	// Array with pointers to the resolution of each point in a Fourier-space FFTW-like array (one for each optics_group)
@@ -613,8 +678,15 @@ public:
 	//Use different padding factors for the projector (PF+0) and backprojector (PF+1)
 	bool asymmetric_padding;
 
-	//Maximum number of significant weights in coarse pass of expectation
+	//Maximum number of significant weights in coarse pass of expectation specified by user
+	int maximum_significants_arg;
+
+	//Maximum number of significant weights in coarse pass of expectation used in refinement
+	// This can be set by user or automatically
 	int maximum_significants;
+
+	//Do regularization by denoising
+	bool do_red;
 
 	// Tabulated sine and cosine values (for 3D helical sub-tomogram averaging with on-the-fly shifts)
 	TabSine tab_sin;
@@ -634,6 +706,12 @@ public:
 
 	// Trust box size and angpix for the input reference
 	bool do_trust_ref_size;
+
+	// Number of particles for initial sigma2_noise estimation per optics group
+	int minimum_nr_particles_sigma2_noise;
+
+	// Do not call makeGoodHelixForEachRef
+    bool skip_realspace_helical_sym;
 
 #ifdef TIMING
 	Timer timer;
@@ -660,112 +738,154 @@ public:
 public:
 
 	MlOptimiser():
-		do_zero_mask(0),
-		do_write_unmasked_refs(0),
-		do_generate_seeds(0),
-		sum_changes_count(0),
-		current_changes_optimal_orientations(0),
-		do_average_unaligned(0),
-		sigma2_fudge(0),
-		do_always_cc(0),
-		best_resol_thus_far(0),
-		debug1(0),
-		incr_size(0),
-		has_large_incr_size_iter_ago(0),
-		nr_iter_wo_resol_gain(0),
-		nr_pool(0),
-		refs_are_ctf_corrected(0),
-		has_high_fsc_at_limit(0),
-		do_acc_currentsize_despite_highres_exp(0),
-		low_resol_join_halves(0),
-		do_auto_refine(0),
-		has_converged(0),
-		only_flip_phases(0),
-		gridding_nr_iter(0),
-		do_use_reconstruct_images(0),
-		fix_sigma_noise(0),
-		current_changes_optimal_offsets(0),
-		smallest_changes_optimal_classes(0),
-		do_print_metadata_labels(0),
-		adaptive_fraction(0),
-		do_print_symmetry_ops(0),
-		do_bfactor(0),
-		do_use_all_data(0),
-		minres_map(0),
-		debug2(0),
-		do_always_join_random_halves(0),
-		my_first_particle_id(0),
-		x_pool(1),
-		nr_threads(0),
-		do_shifts_onthefly(0),
-		exp_ipart_ThreadTaskDistributor(0),
-		do_parallel_disc_io(0),
-		sum_changes_optimal_orientations(0),
-		do_solvent(0),
-		strict_highres_exp(0),
-		sum_changes_optimal_classes(0),
-		acc_trans(0),
-		width_mask_edge(0),
-		has_fine_enough_angular_sampling(0),
-		sum_changes_optimal_offsets(0),
-		do_scale_correction(0),
-		ctf_phase_flipped(0),
-		nr_iter_wo_large_hidden_variable_changes(0),
-		adaptive_oversampling(0),
-		nr_iter(0),
-		intact_ctf_first_peak(0),
-		do_join_random_halves(0),
-		do_skip_align(0),
-		do_calculate_initial_sigma_noise(0),
-		fix_sigma_offset(0),
-		do_firstiter_cc(0),
-		exp_my_last_part_id(0),
-		particle_diameter(0),
-		smallest_changes_optimal_orientations(0),
-		verb(0),
-		do_norm_correction(0),
-		fix_tau(0),
-		directions_have_changed(0),
-		acc_rot(0),
-		do_sequential_halves_recons(0),
-		do_skip_rotate(0),
-		current_changes_optimal_classes(0),
-		do_skip_maximization(0),
-		dont_raise_norm_error(0),
-		do_map(0),
-		combine_weights_thru_disc(0),
-		smallest_changes_optimal_offsets(0),
-		exp_my_first_part_id(0),
-		iter(0),
-		my_last_particle_id(0),
-		ini_high(0),
-		do_ctf_correction(0),
-		max_coarse_size(0),
-		autosampling_hporder_local_searches(0),
-		do_split_random_halves(0),
-		debug_split_random_half(0),
-		random_seed(0),
-		do_gpu(0),
-		anticipate_oom(0),
-		do_helical_refine(0),
-		ignore_helical_symmetry(0),
-		helical_twist_initial(0),
-		helical_rise_initial(0),
-		helical_z_percentage(0),
-		helical_tube_inner_diameter(0),
-		helical_tube_outer_diameter(0),
-		do_helical_symmetry_local_refinement(0),
-		helical_sigma_distance(0),
-		helical_keep_tilt_prior_fixed(0),
+            do_zero_mask(0),
+            do_write_unmasked_refs(0),
+            do_generate_seeds(0),
+            sum_changes_count(0),
+            current_changes_optimal_orientations(0),
+            do_average_unaligned(0),
+            sigma2_fudge(0),
+            do_always_cc(0),
+            best_resol_thus_far(0),
+            debug1(0),
+            incr_size(0),
+            has_large_incr_size_iter_ago(0),
+            nr_iter_wo_resol_gain(0),
+            nr_pool(0),
+            refs_are_ctf_corrected(0),
+            has_high_fsc_at_limit(0),
+            do_acc_currentsize_despite_highres_exp(0),
+            low_resol_join_halves(0),
+            do_auto_refine(0),
+            do_auto_sampling(0),
+            has_converged(0),
+            only_flip_phases(0),
+            gridding_nr_iter(0),
+            do_use_reconstruct_images(0),
+            fix_sigma_noise(0),
+            current_changes_optimal_offsets(0),
+            smallest_changes_optimal_classes(0),
+            do_print_metadata_labels(0),
+            adaptive_fraction(0),
+            do_print_symmetry_ops(0),
+            do_bfactor(0),
+            do_use_all_data(0),
+            minres_map(0),
+            debug2(0),
+            do_always_join_random_halves(0),
+            my_first_particle_id(0),
+            x_pool(1),
+            nr_threads(0),
+            do_shifts_onthefly(0),
+            exp_ipart_ThreadTaskDistributor(0),
+            do_parallel_disc_io(0),
+            sum_changes_optimal_orientations(0),
+            do_solvent(0),
+            strict_highres_exp(0),
+            sum_changes_optimal_classes(0),
+            acc_trans(0),
+            width_mask_edge(0),
+            has_fine_enough_angular_sampling(0),
+            sum_changes_optimal_offsets(0),
+            do_scale_correction(0),
+            ctf_phase_flipped(0),
+            nr_iter_wo_large_hidden_variable_changes(0),
+            adaptive_oversampling(0),
+            nr_iter(0),
+            intact_ctf_first_peak(0),
+            do_join_random_halves(0),
+            do_skip_align(0),
+            do_calculate_initial_sigma_noise(0),
+            fix_sigma_offset(0),
+            do_firstiter_cc(0),
+            do_bimodal_psi(0),
+            do_center_classes(0),
+            exp_my_last_part_id(0),
+            particle_diameter(0),
+            smallest_changes_optimal_orientations(0),
+            verb(0),
+            do_norm_correction(0),
+            fix_tau(0),
+            directions_have_changed(0),
+            acc_rot(0),
+            do_sequential_halves_recons(0),
+            do_skip_rotate(0),
+            current_changes_optimal_classes(0),
+            do_skip_maximization(0),
+            dont_raise_norm_error(0),
+            do_map(0),
+            combine_weights_thru_disc(0),
+            smallest_changes_optimal_offsets(0),
+            exp_my_first_part_id(0),
+            iter(0),
+            my_last_particle_id(0),
+            ini_high(0),
+            do_ctf_correction(0),
+            max_coarse_size(0),
+            autosampling_hporder_local_searches(0),
+            do_split_random_halves(0),
+            my_halfset(-1),
+            debug_split_random_half(0),
+            random_seed(0),
+            do_gpu(0),
+            anticipate_oom(0),
+            do_helical_refine(0),
+            do_preread_images(0),
+            ignore_helical_symmetry(0),
+            helical_twist_initial(0),
+            helical_rise_initial(0),
+            helical_z_percentage(0),
+            helical_tube_inner_diameter(0),
+            helical_tube_outer_diameter(0),
+            do_helical_symmetry_local_refinement(0),
+            helical_sigma_distance(0),
+            helical_keep_tilt_prior_fixed(0),
+            ctf3d_squared(0),
+            do_skip_subtomo_correction(0),
+            normalised_subtomos(0),
+            subtomo_multi_thr(0),
 		//directional_lowpass(0),
 		asymmetric_padding(false),
-		maximum_significants(-1),
-		threadException(NULL),
+            maximum_significants(-1),
+            threadException(NULL),
+            do_init_blobs(false),
+            do_som(false),
+            is_som_iter(false),
+            som_starting_nodes(0),
+            som_connectivity(0),
+            som_inactivity_threshold(0),
+            som_neighbour_pull(0),
+            class_inactivity_threshold(0),
+            gradient_refine(false),
+            do_grad(false),
+            grad_em_iters(0),
+            grad_ini_iter(0),
+            grad_ini_frac(0),
+            grad_fin_iter(0),
+            grad_fin_frac(0),
+            grad_inbetween_iter(0),
+            subset_size(0),
+            grad_ini_subset_size(0),
+            grad_fin_subset_size(0),
+            grad_min_resol(0),
+            grad_ini_resol(0),
+            grad_fin_resol(0),
+            do_grad_skip_anneal(false),
+            mu(0),
+            grad_stepsize(-1),
+            grad_current_stepsize(0),
+            auto_subset_size_order(0),
+            grad_has_converged(false),
+            grad_suspended_local_searches_iter(-1),
+            grad_suspended_finer_sampling_iter(-1),
+            grad_pseudo_halfsets(false),
+            skip_realspace_helical_sym(false),
 #ifdef ALTCPU
 		mdlClassComplex(NULL),
 #endif
-		failsafe_threshold(40),
-		do_trust_ref_size(0)
+            failsafe_threshold(40),
+            do_trust_ref_size(0),
+            minimum_nr_particles_sigma2_noise(1000)
 	{
 #ifdef ALTCPU
 		tbbCpuOptimiser = CpuOptimiserType((void*)NULL);
@@ -789,7 +909,8 @@ public:
 	void read(FileName fn_in, int rank = 0, bool do_prevent_preread = false);
 
 	// Write files to disc
-	void write(bool do_write_sampling, bool do_write_data, bool do_write_optimiser, bool do_write_model, int random_subset = 0);
+	void write(bool do_write_sampling, bool do_write_data, bool do_write_optimiser, bool do_write_model,
+			int random_subset = 0);
 
     /** ========================== Initialisation  =========================== */
 
@@ -799,11 +920,18 @@ public:
 	// Check the mask is thr ight size
 	void checkMask(FileName &_fn_mask, int solvent_nr, int rank);
 
-	// Some general stuff that is shared between MPI and sequential code
+	// Some general stuff that is shared between MPI and sequential code in the early stages of initialisation
 	void initialiseGeneral(int rank = 0);
 
 	// Randomise particle processing order and resize metadata array
 	void initialiseWorkLoad();
+
+	// Fetch initial noise spectra, from input file or calculate from subset of input images,
+	// also calculate initial Iref images if fn_ref == "None"
+	void initialiseSigma2Noise();
+
+	// Initialise initial reference images
+	void initialiseReferences();
 
 	/* Calculates the sum of all individual power spectra and the average of all images for initial sigma_noise estimation
 	 * The rank is passed so that if one splits the data into random halves one can know which random half to treat
@@ -836,7 +964,7 @@ public:
 	 */
 	void expectation();
 
-	/* Setup expectation step. We divide the heavy steps over mpi-followers,
+	/* Setup expectation step. We divide the heavy steps over mpi followers,
 	 * so each call needs a list of which to skip heavy setup for. For
 	 * these classes, only some formatting is done. Data is copied
 	 * explicitly later.*/
@@ -875,6 +1003,14 @@ public:
 	 * */
 	void makeGoodHelixForEachRef();
 
+    /*
+     * Calculate the average CTF^2 from the summed weights in wsum_model and return boolean whether to
+     * correct tau2 estimates by the average CTF^2 (which is needed when using ctf_premultiplied image
+     * because the tau2 is estimated from the CTF-corrected map, whereas the sigma2_noise estimates are
+     * from the CTF-affected differences)
+     */
+    bool setAverageCTF2(MultidimArray<RFLOAT> &avgctf2);
+
 	/* Maximization step
 	 * Updates the current model: reconstructs and updates all other model parameter
 	 */
@@ -884,6 +1020,10 @@ public:
 	 * This is officially part of the maximization, but it is separated because of parallelisation issues.
 	 */
 	void maximizationReconstructClass(int iclass);
+
+	/* Update gradient related parameters, returns class index that should be skipped during SOM
+	 */
+	int maximizationGradientParameters();
 
 	/* Updates all other model parameters (besides the reconstructions)
 	 */
@@ -895,6 +1035,11 @@ public:
 	/* Apply a solvent flattening to a map
 	 */
 	void solventFlatten();
+
+	/* Center classes based on their center-of-mass
+	 * and also update the origin offsets in the _data.star file correspondingly
+	 */
+	void centerClasses();
 
 	/* Updates the current resolution (from data_vs_prior array) and keeps track of best resolution thus far
 	 *  and precalculates a 2D Fourier-space array with pointers to the resolution of each point in a FFTW-centered array
@@ -919,7 +1064,8 @@ public:
 			std::vector<int> &exp_pointer_dir_nonzeroprior,
 			std::vector<int> &exp_pointer_psi_nonzeroprior,
 			std::vector<RFLOAT> &exp_directions_prior,
-			std::vector<RFLOAT> &exp_psi_prior);
+			std::vector<RFLOAT> &exp_psi_prior,
+			std::vector<MultidimArray<RFLOAT> > &exp_STweight);
 
 	/* Store all shifted FourierTransforms in a vector
 	 * also store precalculated 2D matrices with 1/sigma2_noise
@@ -934,7 +1080,9 @@ public:
 			std::vector<std::vector<MultidimArray<Complex > > > &exp_local_Fimgs_shifted_nomask,
 			std::vector<MultidimArray<RFLOAT> > &exp_local_Fctf,
 			std::vector<RFLOAT> &exp_local_sqrtXi2,
-			std::vector<MultidimArray<RFLOAT> > &exp_local_Minvsigma2);
+			std::vector<MultidimArray<RFLOAT> > &exp_local_Minvsigma2,
+			std::vector<MultidimArray<RFLOAT> > &exp_STweight,
+			std::vector<MultidimArray<RFLOAT> > &exp_local_STMulti);
 
 	// Given exp_Mcoarse_significant, check for iorient whether any of the particles has any significant (coarsely sampled) translation
 	bool isSignificantAnyImageAnyTranslation(long int iorient,
@@ -956,7 +1104,8 @@ public:
 			std::vector<std::vector<MultidimArray<Complex > > > &exp_local_Fimgs_shifted,
 			std::vector<MultidimArray<RFLOAT> > &exp_local_Minvsigma2,
 			std::vector<MultidimArray<RFLOAT> > &exp_local_Fctf,
-			std::vector<RFLOAT> &exp_local_sqrtXi);
+			std::vector<RFLOAT> &exp_local_sqrtXi,
+			std::vector<MultidimArray<RFLOAT> > &exp_STweight);
 
 	// Convert all squared difference terms to weights.
 	// Also calculates exp_sum_weight and, for adaptive approach, also exp_significant_weight
@@ -994,7 +1143,8 @@ public:
 			std::vector<std::vector<MultidimArray<Complex > > > &exp_local_Fimgs_shifted_nomask,
 			std::vector<MultidimArray<RFLOAT> > &exp_local_Minvsigma2,
 			std::vector<MultidimArray<RFLOAT> > &exp_local_Fctf,
-			std::vector<RFLOAT> &exp_local_sqrtXi2);
+			std::vector<RFLOAT> &exp_local_sqrtXi2,
+			std::vector<MultidimArray<RFLOAT> > &exp_STweight);
 
 	/** Monitor the changes in the optimal translations, orientations and class assignments for some particles */
 	void monitorHiddenVariableChanges(long int my_first_part_id, long int my_last_part_id);
@@ -1009,8 +1159,14 @@ public:
 	// Adjust angular sampling based on the expected angular accuracies for auto-refine procedure
 	void updateAngularSampling(bool verb = true);
 
-	// Adjust subset size in fast_subsets or SGD algorithms
+	// Adjust subset size in fast_subsets or Gradient algorithms
 	void updateSubsetSize(bool verb = true);
+
+	// Adjust step size for the gradient algorithms
+	void updateStepSize();
+
+	// Adjust tau2 fudge factor
+	void updateTau2Fudge();
 
 	// Check convergence for auto-refine procedure
 	// Also print convergence information to screen for auto-refine procedure
@@ -1022,9 +1178,17 @@ public:
 	// Get metadata array of a subset of particles from the experimental model
 	void getMetaAndImageDataSubset(long int my_first_part_id, long int my_last_part_id, bool do_also_imagedata = true);
 
+	// Get the CTF (and Multiplicity weights where available) volumes from the stored files and correct them
+	void get3DCTFAndMulti(MultidimArray<RFLOAT> &Ictf, MultidimArray<RFLOAT> &Fctf, MultidimArray<RFLOAT> &FstMulti,
+			bool ctf_premultiplied);
+
+	// Apply the Multiplicity weights to correct for Images and CTFs to properly estimate squared differences and averages
+	void applySubtomoCorrection(MultidimArray<Complex > &Fimg, MultidimArray<Complex > &Fimg_nomask ,
+								MultidimArray<RFLOAT> &Fctf, MultidimArray<RFLOAT> &FstMulti);
+
 };
 
 // Global call to threaded core of doThreadExpectationSomeParticles
-void globalThreadExpectationSomeParticles(ThreadArgument &thArg);
+void globalThreadExpectationSomeParticles(void *self, int thread_id);
 
 #endif /* MAXLIK_H_ */

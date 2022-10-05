@@ -45,9 +45,11 @@
 #ifndef _CTF_HH
 #define _CTF_HH
 
-#include "src/multidim_array.h"
-#include "src/metadata_table.h"
-#include "src/jaz/obs_model.h"
+#include <src/multidim_array.h>
+#include <src/metadata_table.h>
+#include <src/jaz/single_particle/obs_model.h>
+#include <src/jaz/image/buffered_image.h>
+#include <src/jaz/gravis/t2Vector.h>
 #include <map>
 
 
@@ -238,7 +240,7 @@ public:
 		return retval;
 	}
 
-	RFLOAT getGamma(RFLOAT X, RFLOAT Y) const;
+	RFLOAT getLowOrderGamma(RFLOAT X, RFLOAT Y) const;
 
 	// compute the local frequency of the ctf
 	// (i.e. the radial slope of 'double gamma' in getCTF())
@@ -262,7 +264,7 @@ public:
 		RFLOAT u2 = X * X + Y * Y;
 		RFLOAT u4 = u2 * u2;
 
-		RFLOAT gamma = K1 * (Axx*X*X + 2.0*Axy*X*Y + Ayy*Y*Y) + K2 * u4 - K5 - K3 + gammaOffset + PI/2.;
+		RFLOAT gamma = K1 * (Axx*X*X + 2.0*Axy*X*Y + Ayy*Y*Y) + K2 * u4 - K5 - K3 + gammaOffset;
 
 		RFLOAT sinx, cosx;
 #ifdef RELION_SINGLE_PRECISION
@@ -271,8 +273,8 @@ public:
 		SINCOS( gamma, &sinx, &cosx );
 #endif
 		Complex retval;
-		retval.real = cosx;
-		retval.imag = (is_positive) ? sinx : -sinx;
+		retval.real = -sinx;
+		retval.imag = (is_positive) ? cosx : -cosx;
 
 		return retval;
 	}
@@ -300,6 +302,11 @@ public:
 
 	/// Generate (Fourier-space, i.e. FFTW format) image with all CTF values.
 	/// The dimensions of the result array should have been set correctly already
+	//  FFTW format means the Nyquist component is on the positive side.
+	//   e.g. for N = 6,  kx = [0, 1, 2, 3], ky = [0, 1, 2, 3, -2, -1]
+	//  Unfortunately, codes in jaz/ use different convention.
+	//   e.g. for N - 6, kx = [0, 1, 2, 3], ky = [0, 1, 2, -3, -2, -1]
+	//  TODO: FIXME: Thus, the returned values at Nyquist are WRONG!!!
 	void getFftwImage(MultidimArray < RFLOAT > &result, int orixdim, int oriydim, RFLOAT angpix,
 	                  bool do_abs = false, bool do_only_flip_phases = false, bool do_intact_until_first_peak = false,
 	                  bool do_damping = true, bool do_ctf_padding = false, bool do_intact_after_first_peak = false) const;
@@ -330,9 +337,154 @@ public:
 	// Calculate weight W for Ewald-sphere curvature correction: apply this to the result from getFftwImage
 	void applyWeightEwaldSphereCurvature_noAniso(MultidimArray < RFLOAT > &result, int orixdim, int oriydim, RFLOAT angpix, RFLOAT particle_diameter);
 
-	std::vector<double> getK();
-	double getAxx();
-	double getAxy();
-	double getAyy();
+	void applyEwaldMask(RawImage<RFLOAT>& result, int orixdim, int oriydim, RFLOAT angpix, RFLOAT particle_diameter);
+
+	
+	std::vector<double> getK() const;
+	double getAxx() const;
+	double getAxy() const;
+	double getAyy() const;
+	
+	
+	
+	// Methods using the new data types from 2019/2020 in src/jaz/
+	
+	template <typename T>
+	void draw(
+		int w0, int h0, double angpix,
+		const BufferedImage<double>* gammaOffset, T* dest) const
+	{
+		const int wh = w0 / 2 + 1;
+		
+		double xs = w0 * angpix;
+		double ys = h0 * angpix;
+		
+		if (gammaOffset)
+		{
+			if (gammaOffset->ydim != h0)
+			{
+				REPORT_ERROR_STR(
+					"CTF::draw: wrong cached gamma-offset size. Box size: "
+					<< w0 << ", cache size: " << gammaOffset->ydim);
+			}
+
+			for (int y = 0; y < h0; y++)
+			for (int x = 0; x < wh; x++)
+			{
+				double xx = x / xs;
+				double yy = (y < h0/2? y : y - h0) / ys;
+
+				dest[y*wh + x] = getCTF(xx, yy, false, false, false, true, (*gammaOffset)(x,y));
+			}
+		}
+		else
+		{
+			for (int y = 0; y < h0; y++)
+			for (int x = 0; x < wh; x++)
+			{
+				double xx = x / xs;
+				double yy = (y < h0/2? y : y - h0) / ys;
+
+				dest[y*wh + x] = getCTF(xx,yy, false, false, false, true);
+			}
+		}
+	}
+	
+	template <typename T>
+	void draw_fast(int w0, int h0, double angpix,
+				   const BufferedImage<double>* gammaOffset, T* dest) const
+	{
+		const int wh = w0 / 2 + 1;
+		
+		const double xs = w0 * angpix;
+		const double ys = h0 * angpix;
+		
+		const double r2_max = wh * wh / (xs * xs);
+		
+		if (gammaOffset)
+		{
+			if (gammaOffset->ydim != h0)
+			{
+				REPORT_ERROR_STR(
+					"CTF::draw_fast: wrong cached gamma-offset size. Box size: "
+					<< w0 << ", cache size: " << gammaOffset->ydim);
+			}
+
+			for (int y = 0; y < h0; y++)
+			for (int x = 0; x < wh; x++)
+			{
+				const double xx = x / xs;
+				const double yy = (y < h0/2? y : y - h0) / ys;
+
+				const double u2 = xx * xx + yy * yy;
+
+				if (u2 < r2_max)
+				{
+					double u4 = u2 * u2;
+
+					const double gamma = K1 * (Axx*xx*xx + 2.0*Axy*xx*yy + Ayy*yy*yy) + K2 * u4 - K5 - K3 + (*gammaOffset)(x,y);
+
+					dest[y*wh + x] = -scale*sin(gamma);
+				}
+			}
+		}
+		else
+		{
+			for (int y = 0; y < h0; y++)
+			for (int x = 0; x < wh; x++)
+			{
+				const double xx = x / xs;
+				const double yy = (y < h0/2? y : y - h0) / ys;
+
+				const double u2 = xx * xx + yy * yy;
+
+				if (u2 < r2_max)
+				{
+					double u4 = u2 * u2;
+
+					const double gamma = K1 * (Axx*xx*xx + 2.0*Axy*xx*yy + Ayy*yy*yy) + K2 * u4 - K5 - K3;
+
+					dest[y*wh + x] = -sin(gamma);
+				}
+			}
+		}
+	}
+	
+	template <typename T>
+	void drawGamma(int w0, int h0, double angpix, T* dest) const
+	{
+		const int wh = w0 / 2 + 1;
+		
+		double xs = w0 * angpix;
+		double ys = h0 * angpix;
+		
+		if (obsModel == 0 || !obsModel->hasEvenZernike)
+		{
+			for (int y = 0; y < h0; y++)
+			for (int x = 0; x < wh; x++)
+			{
+				double xx = x / xs;
+				double yy = (y < h0/2? y : y - h0) / ys;
+		
+				dest[y*wh + x] = getLowOrderGamma(xx,yy);
+			}
+		}
+		else
+		{
+			const BufferedImage<RFLOAT>& gammaOffset = obsModel->getGammaOffset(opticsGroup, h0);
+			
+			for (int y = 0; y < h0; y++)
+			for (int x = 0; x < wh; x++)
+			{
+				double xx = x / xs;
+				double yy = (y < h0/2? y : y - h0) / ys;
+		
+				dest[y*wh + x] = getLowOrderGamma(xx,yy) + gammaOffset(x,y);
+			}
+		}
+	}
+	
+	void setDefocusMatrix(double axx, double axy, double ayy);
+			
 };
 #endif

@@ -40,7 +40,7 @@
 #include "src/image.h"
 #include "src/metadata_label.h"
 #include "src/metadata_table.h"
-#include "src/jaz/obs_model.h"
+#include <src/jaz/single_particle/obs_model.h>
 #include <src/matrix2d.h>
 #include <src/fftw.h>
 #include <src/time.h>
@@ -49,7 +49,9 @@
 
 #define GUI_BACKGROUND_COLOR (fl_rgb_color(240,240,240))
 #define GUI_INPUT_COLOR (fl_rgb_color(255,255,230))
-#define GUI_RUNBUTTON_COLOR (fl_rgb_color(238,130,238))
+#define GUI_RUNBUTTON_COLOR (fl_rgb_color(160, 30, 60))
+
+
 
 #define SELECTED 1
 #define NOTSELECTED 0
@@ -147,7 +149,8 @@ public:
 	int fillSingleViewerCanvas(MultidimArray<RFLOAT> image, RFLOAT _minval, RFLOAT _maxval, RFLOAT _sigma_contrast, RFLOAT _scale);
 	int fillPickerViewerCanvas(MultidimArray<RFLOAT> image, RFLOAT _minval, RFLOAT _maxval, RFLOAT _sigma_contrast, RFLOAT _scale, RFLOAT _coord_scale,
 	                           int _particle_radius, bool do_startend = false, FileName _fn_coords = "",
-	                           FileName _fn_color = "", FileName _fn_mic= "", FileName _color_label = "", RFLOAT _color_blue_value = 0., RFLOAT _color_red_value = 1.);
+	                           FileName _fn_color = "", FileName _fn_mic= "", FileName _color_label = "", RFLOAT _color_blue_value = 0., RFLOAT _color_red_value = 1.,
+							   RFLOAT _minimum_pick_fom = -999.);
 };
 
 class basisViewerCanvas : public Fl_Widget
@@ -175,6 +178,9 @@ public:
 	// Read stacks at once to speed up?
 	bool do_read_whole_stacks;
 
+	// Minimum value for rlnAutopickFigureOfMerit to display picks
+	RFLOAT minimum_pick_fom;
+
 	// Constructor with w x h size of the window and a title
 	basisViewerCanvas(int X,int Y, int W, int H, const char* title=0) : Fl_Widget(X,Y,W, H, title) { }
 
@@ -185,6 +191,7 @@ public:
 	          RFLOAT lowpass = -1.0, RFLOAT highpass = -1.0);
 	void fill(MultidimArray<RFLOAT> &image, RFLOAT _minval, RFLOAT _maxval, RFLOAT _sigma_contrast, RFLOAT _scale = 1.);
 	void setSelectionType();
+	void setFOMThreshold();
 };
 
 class multiViewerCanvas : public basisViewerCanvas
@@ -473,11 +480,12 @@ public:
 	// Input for the display parameters
 	Fl_Input *black_input, *white_input, *sigma_contrast_input, *scale_input, *lowpass_input, *highpass_input, *angpix_input;
 	Fl_Input *col_input, *ori_scale_input, *max_nr_images_input, *max_parts_per_class_input;
-	Fl_Check_Button *sort_button, *reverse_sort_button, *apply_orient_button, *read_whole_stack_button;
+	Fl_Check_Button *sort_button, *reverse_sort_button, *apply_orient_button, *display_label_button;
 	Fl_Choice *display_choice, *sort_choice, *colour_scheme_choice;
 
 	// Constructor with w x h size of the window and a title
-	displayerGuiWindow(int W, int H, const char* title=0): Fl_Window(W, H, title),	sort_button(NULL), reverse_sort_button(NULL), apply_orient_button(NULL), read_whole_stack_button(NULL) {}
+	displayerGuiWindow(int W, int H, const char* title=0): Fl_Window(W, H, title),	sort_button(NULL),
+			reverse_sort_button(NULL), apply_orient_button(NULL), display_label_button(NULL){}
 
 	// Fill all except for the browser
 	int fill(FileName &fn_in);
@@ -498,6 +506,7 @@ private:
     void writeLastSettings();
 
 };
+
 
 class Displayer
 {
@@ -563,6 +572,9 @@ public:
 	// Values for blue and red coloring
 	RFLOAT color_blue_value, color_red_value;
 
+	// Minimum value for rlnAutopickFigureOfMerit to display picks
+	RFLOAT minimum_pick_fom;
+
 	// Tablename to read from in the input STAR file
 	FileName table_name;
 
@@ -621,6 +633,9 @@ public:
 	// Highpass filter for picker images
 	RFLOAT highpass;
 
+	// Or denoise using Topaz?
+	bool do_topaz_denoise;
+
 	// Pixel size to calculate lowpass filter in Angstroms and translations in apply_orient
 	RFLOAT angpix;
 
@@ -633,6 +648,12 @@ public:
 	// Only show a limited number of images
 	long int max_nr_images;
 
+	// Topaz executable (for denoising of micrographs in picking mode)
+	FileName fn_topaz_exe;
+
+	// Shell for calling Topaz
+	FileName fn_shell;
+
 public:
 	// Read command line arguments
 	void read(int argc, char **argv);
@@ -642,6 +663,9 @@ public:
 
 	// Initialise some general stuff after reading
 	void initialise();
+
+	// On-the-fly topaz denoising for picking micrographs
+	void topazDenoiseMap(FileName fn_in, FileName fn_odir, Image<RFLOAT> &img);
 
 	// Decide what to do
 	void run();

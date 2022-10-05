@@ -11,7 +11,7 @@
 
 #include <stdexcept>
 
-#include <gravis/tArray.h>
+#include <src/jaz/gravis/tArray.h>
 #include <fstream>
 #include <string>
 

@@ -1,7 +1,7 @@
 #ifndef CUDA_DEVICE_MEM_UTILS_H_
 #define CUDA_DEVICE_MEM_UTILS_H_
 
-#ifdef CUDA
+#ifdef _CUDA_ENABLED
 #include <cuda_runtime.h>
 #include <curand.h>
 #include "src/acc/cuda/cuda_settings.h"
@@ -13,12 +13,10 @@
 #include <fstream>
 #include <iostream>
 #include <vector>
-#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
 
-#include "src/parallel.h"
 #include "src/complex.h"
 
 // Forward definition

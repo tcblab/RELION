@@ -20,13 +20,14 @@
 #include <omp.h>
 
 #include "src/motioncorr_runner.h"
-#ifdef CUDA
+#ifdef _CUDA_ENABLED
 #include "src/acc/cuda/cuda_mem_utils.h"
 #endif
 #include "src/micrograph_model.h"
 #include "src/matrix2d.h"
 #include "src/matrix1d.h"
-#include "src/jaz/img_proc/image_op.h"
+#include <src/jaz/single_particle/img_proc/image_op.h>
+#include <src/jaz/single_particle/new_ft.h>
 #include "src/funcs.h"
 #include "src/renderEER.h"
 
@@ -79,6 +80,7 @@ void MotioncorrRunner::read(int argc, char **argv, int rank)
 	int gen_section = parser.addSection("General options");
 	fn_in = parser.getOption("--i", "STAR file with all input micrographs, or a Linux wildcard with all micrographs to operate on");
 	fn_out = parser.getOption("--o", "Name for the output directory", "MotionCorr");
+	do_skip_logfile = parser.checkOption("--skip_logfile", "Skip generation of tracks-part of the logfile.pdf");
 	n_threads = textToInteger(parser.getOption("--j", "Number of threads per movie (= process)", "1"));
 	max_io_threads = textToInteger(parser.getOption("--max_io_threads", "Limit the number of IO threads.", "-1"));
 	continue_old = parser.checkOption("--only_do_unfinished", "Only run motion correction for those micrographs for which there is not yet an output micrograph.");
@@ -117,6 +119,7 @@ void MotioncorrRunner::read(int argc, char **argv, int rank)
 
 	parser.addSection("Own motion correction options");
 	do_own = parser.checkOption("--use_own", "Use our own implementation of motion correction");
+	write_float16  = parser.checkOption("--float16", "Write in half-precision 16 bit floating point numbers (MRC mode 12), instead of 32 bit (MRC mode 0).");
 	skip_defect = parser.checkOption("--skip_defect", "Skip hot pixel detection");
 	save_noDW = parser.checkOption("--save_noDW", "Save aligned but non dose weighted micrograph");
 	max_iter = textToInteger(parser.getOption("--max_iter", "Maximum number of iterations for alignment. Only valid with --use_own", "5"));
@@ -130,6 +133,13 @@ void MotioncorrRunner::read(int argc, char **argv, int rank)
 	early_binning = !parser.checkOption("--no_early_binning", "Disable --early_binning");
 	if (fabs(bin_factor - 1) < 0.01)
 		early_binning = false;
+
+	if ((!do_motioncor2 && !do_own) || (do_motioncor2 && do_own))
+		REPORT_ERROR("You have to choose either UCSF MotionCor2 or RELION's own implementation.");
+	if (write_float16 && do_motioncor2)
+		REPORT_ERROR("UCSF MotionCor2 cannot write in float16.");
+	if (write_float16 && grouping_for_ps <= 0)
+		REPORT_ERROR("When writing in float16, you have to write power spectra for CTFFIND.");
 
 	dose_motionstats_cutoff = textToFloat(parser.getOption("--dose_motionstats_cutoff", "Electron dose (in electrons/A2) at which to distinguish early/late global accumulated motion in output statistics", "4."));
 	if (ccf_downsample > 1) REPORT_ERROR("--ccf_downsample cannot exceed 1.");
@@ -152,7 +162,7 @@ void MotioncorrRunner::initialise()
 	if (fn_defect.getExtension() == "txt" && detectSerialEMDefectText(fn_defect))
 	{
 		std::cerr << "ERROR: The defect file seems to be a SerialEM's defect file. This format is different from the MotionCor2's format (x y w h)." << std::endl;
-		std::cerr << "       You can convert it to a defect map by IMOD utilities e.g. \"clip defect -D defect.txt -f tif movie.mrc defect_map.tif\"." << std::endl; 
+		std::cerr << "       You can convert it to a defect map by IMOD utilities e.g. \"clip defect -D defect.txt -f tif movie.mrc defect_map.tif\"." << std::endl;
 		std::cerr << "       See explanations in the SerialEM manual." << std::endl;
 		REPORT_ERROR("The defect file is in the SerialEM format, not MotionCor2's format (x y w h). See above for details.");
 	}
@@ -211,7 +221,7 @@ void MotioncorrRunner::initialise()
 		REPORT_ERROR("ERROR: when not providing an input STAR file, it is mandatory to provide the voltage in kV through --voltage.");
 	}
 
-#ifdef CUDA
+#ifdef _CUDA_ENABLED
 	if (do_motioncor2)
 	{
 		if (gpu_ids.length() > 0)
@@ -344,8 +354,7 @@ void MotioncorrRunner::initialise()
 
 		if (newdir != prevdir)
 		{
-			std::string command = " mkdir -p " + newdir;
-			int res = system(command.c_str());
+			mktree(newdir);
 			prevdir = newdir;
 		}
 	}
@@ -439,7 +448,7 @@ void MotioncorrRunner::run()
 		else if (do_motioncor2)
 			std::cout << " Correcting beam-induced motions using Shawn Zheng's MOTIONCOR2 ..." << std::endl;
 		else
-			REPORT_ERROR("Bug: by now it should be clear whether to use MotionCor2 or Unblur...");
+			REPORT_ERROR("Bug: by now it should be clear whether to use UCSF MotionCor2 or RELION's own implementation...");
 
 		init_progress_bar(fn_micrographs.size());
 		barstep = XMIPP_MAX(1, fn_micrographs.size() / 60);
@@ -600,7 +609,8 @@ bool MotioncorrRunner::executeMotioncor2(Micrograph &mic, int rank)
 			{
 				if (std::rename(fn_avg.c_str(), fn_tmp.c_str()))
 				{
-					std::cerr << "ERROR in renaming: " << fn_avg << " to " << fn_tmp << std::endl;
+					std::cerr << "ERROR in renaming " << fn_avg << " to " << fn_tmp << ".\n";
+					std::cerr << std::strerror(errno) << std::endl;
 					return false;
 				}
 			}
@@ -608,20 +618,22 @@ bool MotioncorrRunner::executeMotioncor2(Micrograph &mic, int rank)
 			{
 				if (std::remove(fn_avg.c_str()))
 				{
-					std::cerr << "ERROR in removing non-dose weighted image: " << fn_avg << std::endl;
+					std::cerr << "ERROR in removing non-dose weighted image " << fn_avg << ".\n";
+					std::cerr << std::strerror(errno) << std::endl;
 					return false;
 				}
 			}
 
 			fn_tmp = fn_avg.withoutExtension() + "_DWS.mrc";
 			if (exists(fn_tmp))
-				std::remove(fn_tmp.c_str());
+				std::remove(fn_tmp.c_str()); // failure does not matter
 
 			// Move _DW.mrc to .mrc filename
 			fn_tmp = fn_avg.withoutExtension() + "_DW.mrc";
 			if (std::rename(fn_tmp.c_str(), fn_avg.c_str()))
 			{
-				std::cerr << "ERROR in renaming: " << fn_tmp << " to " << fn_avg <<std::endl;
+				std::cerr << "ERROR in renaming " << fn_tmp << " to " << fn_avg << ".\n";
+				std::cerr << std::strerror(errno) << std::endl;
 				return false;
 			}
 		}
@@ -814,7 +826,7 @@ void MotioncorrRunner::generateLogFilePDFAndWriteStarFiles()
 	long int barstep = XMIPP_MAX(1, fn_ori_micrographs.size() / 60);
 	if (verb > 0)
 	{
-		std::cout << " Generating logfile.pdf ... " << std::endl;
+		std::cout << " Generating joint STAR file ... " << std::endl;
 		init_progress_bar(fn_ori_micrographs.size());
 	}
 
@@ -894,6 +906,15 @@ void MotioncorrRunner::generateLogFilePDFAndWriteStarFiles()
 	}
 	obsModel.save(MDavg, fn_out + "corrected_micrographs.star", "micrographs");
 
+	if (verb > 0 )
+	{
+		progress_bar(fn_ori_micrographs.size());
+
+		std::cout << " Done! Written: " << fn_out << "corrected_micrographs.star" << std::endl;
+	}
+
+	if (verb > 0) std::cout << " Now generating logfile.pdf ... " << std::endl;
+
 	// Now generate EPS plot with histograms and combine all EPS into a logfile.pdf
 	std::vector<EMDLabel> plot_labels;
 	plot_labels.push_back(EMDL_MICROGRAPH_ACCUM_MOTION_TOTAL);
@@ -927,26 +948,49 @@ void MotioncorrRunner::generateLogFilePDFAndWriteStarFiles()
 			}
 		}
 	}
-
-
-	// Combine all EPS into a single logfile.pdf
-	FileName fn_prev="";
-	for (long int i = 0; i < fn_ori_micrographs.size(); i++)
+	if (do_skip_logfile)
 	{
-		if (fn_prev != fn_ori_micrographs[i].beforeLastOf("/"))
+
+		// Just have the overall headers only in the output PDF file
+		joinMultipleEPSIntoSinglePDF(fn_out + "logfile.pdf", all_fn_eps);
+
+	}
+	else
+	{
+
+		// Always calculate the new overall headers at the top of the PDF file
+		joinMultipleEPSIntoSinglePDF(fn_out + "header.pdf", all_fn_eps);
+
+		// Combine all EPS into a single logfile.pdf
+		// Only loop over fn_micrographs, not fn_ori_micrographs, so only the new ones for do_at_most or only_do_unfinished
+		all_fn_eps.clear();
+		FileName fn_prev="";
+		for (long int i = 0; i < fn_micrographs.size(); i++)
 		{
-			fn_prev = fn_ori_micrographs[i].beforeLastOf("/");
-			all_fn_eps.push_back(fn_out + fn_prev+"/*.eps");
+			if (fn_prev != fn_micrographs[i].beforeLastOf("/"))
+			{
+				fn_prev = fn_micrographs[i].beforeLastOf("/");
+				all_fn_eps.push_back(fn_out + fn_prev+"/*.eps");
+			}
 		}
+
+		joinMultipleEPSIntoSinglePDF(fn_out + "batch.pdf", all_fn_eps);
+
+		// Concatenate all PDFs of the batches
+		std::vector<FileName> fn_pdfs;
+		if (exists(fn_out + "all_batches.pdf")) fn_pdfs.push_back(fn_out + "all_batches.pdf");
+		fn_pdfs.push_back(fn_out + "batch.pdf");
+		concatenatePDFfiles(fn_out + "all_batches.pdf", fn_pdfs);
+
+		// Put header in front of comabined batches
+		concatenatePDFfiles(fn_out + "logfile.pdf", fn_out + "header.pdf", fn_out + "all_batches.pdf");
+
 	}
 
-	joinMultipleEPSIntoSinglePDF(fn_out + "logfile.pdf", all_fn_eps);
 
 	if (verb > 0 )
 	{
-		progress_bar(fn_ori_micrographs.size());
-
-		std::cout << " Done! Written: " << fn_out << "logfile.pdf" << " and " << fn_out << "corrected_micrographs.star" << std::endl;
+		std::cout << " Done! Written: " << fn_out << "logfile.pdf" << std::endl;
 	}
 }
 
@@ -1019,7 +1063,7 @@ bool MotioncorrRunner::executeOwnMotionCorrection(Micrograph &mic) {
 	// Setup grouping
 	logfile << "Frame grouping: n_frames = " << n_frames << ", requested group size = " << group << std::endl;
 	const int n_groups = n_frames / group;
-	if (n_groups < 3) 
+	if (n_groups < 3)
 	{
 		std::cerr << "Skipped " << fn_mic << ": too few frames (" << n_groups << " < 3) after grouping . Probably the movie is truncated or you made a mistake in frame grouping." << std::endl;
 		return false;
@@ -1134,19 +1178,15 @@ bool MotioncorrRunner::executeOwnMotionCorrection(Micrograph &mic) {
 #endif
 		}
 
-		// TODO: This should be done earlier and merged with badmap
 		if (fn_gain_reference != "")
 		{
-			int n_bad_eer = 0;
 			FOR_ALL_DIRECT_ELEMENTS_IN_MULTIDIMARRAY(Igain())
 			{
 				if (DIRECT_MULTIDIM_ELEM(Igain(), n) == 0)
 				{
-//					n_bad_eer++;
 					DIRECT_MULTIDIM_ELEM(bBad, n) = true;
 				}
 			}
-//			std::cout << "n_bad_eer = " << n_bad_eer << std::endl;
 		}
 
 		int n_bad = 0;
@@ -1196,7 +1236,7 @@ bool MotioncorrRunner::executeOwnMotionCorrection(Micrograph &mic) {
 //					std::cout << std::endl;
 				}
 //				std::cout << "n_ok = " << n_ok;
-				if (n_ok > NUM_MIN_OK) 
+				if (n_ok > NUM_MIN_OK)
 					DIRECT_A2D_ELEM(Iframes[iframe](), i, j) = pbuf[rand() % n_ok];
 				else
 					DIRECT_A2D_ELEM(Iframes[iframe](), i, j) = rnd_gaus(frame_mean, frame_std);
@@ -1212,7 +1252,7 @@ bool MotioncorrRunner::executeOwnMotionCorrection(Micrograph &mic) {
 	// Debug output
 	for (int iframe = 0; iframe < n_frames; iframe++)
 	{
-		Iframes[iframe].write(fn_avg.withoutExtension() + "_frames.mrcs", iframe, 
+		Iframes[iframe].write(fn_avg.withoutExtension() + "_frames.mrcs", iframe,
 		                      true, (iframe == 0) ? WRITE_OVERWRITE : WRITE_APPEND);
 	}
 #endif
@@ -1589,7 +1629,7 @@ skip_fitting:
 
 		// Final output
                 Iref.setSamplingRateInHeader(output_angpix, output_angpix);
-		Iref.write(!do_dose_weighting ? fn_avg : fn_avg_noDW);
+		Iref.write(!do_dose_weighting ? fn_avg : fn_avg_noDW, -1, false, WRITE_OVERWRITE, write_float16 ? Float16: Float);
 		logfile << "Written aligned but non-dose weighted sum to " << (!do_dose_weighting ? fn_avg : fn_avg_noDW) << std::endl;
 	}
 
@@ -1640,7 +1680,7 @@ skip_fitting:
 
 		// Final output
                 Iref.setSamplingRateInHeader(output_angpix, output_angpix);
-		Iref.write(fn_avg);
+		Iref.write(fn_avg, -1, false, WRITE_OVERWRITE, write_float16 ? Float16: Float);
 		logfile << "Written aligned and dose-weighted sum to " << fn_avg << std::endl;
 	}
 

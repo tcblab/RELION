@@ -175,8 +175,22 @@ public:
 	// objectID is 0-indexed.
 	template<class T>
 	bool getValue(EMDLabel label, T& value, long objectID = -1) const;
+	
+	// syntactic sugar: crashes if the label does not exist
+	template<class T>
+	void getValueSafely(EMDLabel label, T& value, long objectID = -1) const;
 
 	bool getValueToString(EMDLabel label, std::string &value, long int objectID = -1, bool escape=false) const;
+	
+	// more syntactic sugar to avoid having to declare output variables separately:	
+	int getInt(EMDLabel label, long objectID = -1) const;
+	int getIntMinusOne(EMDLabel label, long objectID = -1) const;
+	RFLOAT getRfloat(EMDLabel label, long objectID = -1) const;
+	RFLOAT getDouble(EMDLabel label, long objectID = -1) const;
+	RFLOAT getAngleInRad(EMDLabel label, long objectID = -1) const;
+	bool getBool(EMDLabel label, long objectID = -1) const;
+	std::string getString(EMDLabel label, long objectID = -1) const;
+	std::vector<double> getDoubleVector(EMDLabel label, long objectID = -1) const;
 
 	std::string getUnknownLabelNameAt(int i) const;
 
@@ -289,16 +303,27 @@ public:
 	 *
 	 * If no data block is found the function will return 0 and the MetaDataTable remains empty
 	 */
+
+	static std::vector<MetaDataTable> readAll(
+			const std::string& in,
+			int expectedNumber = 0,
+			bool do_only_count = false);
+
+	static std::vector<MetaDataTable> readAll(
+			std::ifstream& in,
+			int expectedNumber = 0,
+			bool do_only_count = false);
+
 	long int readStar(std::ifstream& in, const std::string &name = "", bool do_only_count = false);
 
 	// Read a MetaDataTable (get file format from extension)
 	long int read(const FileName &filename, const std::string &name = "", bool do_only_count = false);
 
 	// Write a MetaDataTable in STAR format
-	void write(std::ostream& out = std::cout);
+	void write(std::ostream& out = std::cout) const;
 
 	// Write to a single file
-	void write(const FileName & fn_out);
+	void write(const FileName & fn_out) const;
 
 	// Make a histogram of a column
 	void columnHistogram(EMDLabel label, std::vector<RFLOAT> &histX, std::vector<RFLOAT> &histY, int verb = 0, CPlot2D *plot2D = NULL,
@@ -364,6 +389,7 @@ MetaDataTable subsetMetaDataTable(MetaDataTable &MDin, EMDLabel label, std::stri
 // OriginX/Y are multiplied by origin_scale before added to CoordinateX/Y to compensate for down-sampling
 MetaDataTable removeDuplicatedParticles(MetaDataTable &MDin, EMDLabel mic_label, RFLOAT threshold, RFLOAT origin_scale=1.0, FileName fn_removed="", bool verb=true);
 
+// This flag should be enabled via "cmake -DMDT_TYPE_CHECK=ON"
 #ifdef METADATA_TABLE_TYPE_CHECK
 //#pragma message("typecheck enabled")
 template<class T>
@@ -416,7 +442,9 @@ bool MetaDataTable::getValue(EMDLabel label, T& value, long objectID) const
 			objectID = current_objectID;
 		}
 		else
+		{
 			checkObjectID(objectID,  "MetaDataTable::getValue");
+		}
 
 		objects[objectID]->getValue(off, value);
 		return true;
@@ -424,6 +452,15 @@ bool MetaDataTable::getValue(EMDLabel label, T& value, long objectID) const
 	else
 	{
 		return false;
+	}
+}
+
+template<class T>
+void MetaDataTable::getValueSafely(EMDLabel label, T& value, long objectID) const
+{
+	if (!getValue(label, value, objectID))
+	{
+		REPORT_ERROR_STR("Label "+EMDL::label2Str(label)+" not present in "+name);
 	}
 }
 

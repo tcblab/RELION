@@ -32,7 +32,7 @@
 #include "src/metadata_table.h"
 #include "src/ctffind_runner.h"
 #include "src/helix.h"
-#include "src/jaz/obs_model.h"
+#include <src/jaz/single_particle/obs_model.h>
 #include <src/fftw.h>
 #include <src/time.h>
 
@@ -47,7 +47,10 @@ public:
 	int verb;
 
 	// Name for directory of output Particle stacks and Particle STAR file
-	FileName fn_part_dir, fn_part_star;
+	FileName fn_part_dir, fn_part_star, fn_pick_star;
+
+	// Write in float16 (MRC mode 12)?
+	bool write_float16;
 
 	// Does the input micrograph STAR file or the input data STAR file have CTF information?
 	bool mic_star_has_ctf, data_star_has_ctf;
@@ -74,7 +77,13 @@ public:
 	bool do_skip_ctf_logfiles;
 
 	// STAR file with all (selected) micrographs, the suffix of the coordinates files, and the directory where the coordinate files are
-	FileName fn_star_in, fn_coord_suffix, fn_coord_dir ;
+	FileName fn_star_in, fn_coord_suffix, fn_coord_dir;
+
+	// Map to go from micrograph name to coordinate file name
+	std::map<FileName, FileName> micname2coordname;
+
+	// Alternative to fn_coord_suffix: a list of all coordinate files
+	FileName fn_coord_list;
 
 	// STAR file with refined particle coordinates (to re-extract particles, for example with different binning)
 	FileName fn_data;
@@ -112,6 +121,9 @@ public:
 
 	// Box size to extract the particles in
 	int extract_size;
+
+	// Minimum threshold for autopickFigureOfMerit to extract particles
+	RFLOAT extract_minimum_fom;
 
 	// Box size to extract the particle for premultiplication with the CTF
 	int premultiply_ctf_extract_size;
@@ -223,8 +235,7 @@ public:
 			RFLOAT &all_maxval);
 
 
-	// Get the coordinate filename and the output filename for the particle stack from the micrograph filename
-	FileName getCoordinateFileName(FileName fn_mic);
+	// Get the coordinate metadatatable from fn_data
 	MetaDataTable getCoordinateMetaDataTable(FileName fn_mic);
 	FileName getOutputFileNameRoot(FileName fn_mic);
 

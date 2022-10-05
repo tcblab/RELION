@@ -17,11 +17,6 @@ list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 add_definitions(-DINSTALL_LIBRARY_DIR=${CMAKE_INSTALL_PREFIX}/lib/)
 add_definitions(-DSOURCE_DIR=${CMAKE_SOURCE_DIR}/src/)
 
-if(MDT_TYPE_CHECK)
-    message(" DEVELOPER MODE: MetaDataTable type check is enabled.")
-    add_definitions(-DMETADATA_TABLE_TYPE_CHECK)
-endif()
-
 # message(STATUS "INSTALL_LIBRARY_DIR set to ${CMAKE_INSTALL_PREFIX}/lib/")
 # message(STATUS "SOURCE_DIR set to ${CMAKE_SOURCE_DIR}/src/")
 
@@ -64,6 +59,11 @@ if(NOT ${CMAKE_BUILD_TYPE} STREQUAL "")
 	message(STATUS "BUILD TYPE set to '${CMAKE_BUILD_TYPE}'")
 	SET(CMAKE_BUILD_TYPE ${CMAKE_BUILD_TYPE} CACHE STRING "Choose the type of
 build, options are: 'None', 'Release', 'Debug', 'RelWithDebInfo', and 'Profiling'.")
+
+	if (${CMAKE_BUILD_TYPE_LOWER} STREQUAL "debug")
+		set(MDT_TYPE_CHECK ON)
+	endif()
+
 else()
 	SET(CMAKE_BUILD_TYPE "Release")
 	message(STATUS "BUILD TYPE set to the default type:  '${CMAKE_BUILD_TYPE}'")
@@ -73,8 +73,8 @@ endif()
 # ------------------OPTIONS WHICH ARE NEEDED TO SET BUILD-TYPES (COMPILATION FLAGS)--
 # ------------------------------------------------------------------------CUDA-ARCH--
 if(NOT DEFINED CUDA_ARCH)
-    message(STATUS "Setting fallback CUDA_ARCH=35")
-    set(CUDARCH "-arch=sm_35")
+    message(STATUS "Setting fallback CUDA_ARCH=50")
+    set(CUDARCH "-arch=sm_50")
 else(NOT DEFINED CUDA_ARCH)
     message(STATUS "Using provided CUDA_ARCH=${CUDA_ARCH}")
     set(CUDARCH "-arch=sm_${CUDA_ARCH}")
@@ -98,13 +98,6 @@ option(DoublePrec_CPU "DoublePrec_CPU" ON)
 option(DoublePrec_ACC "Accelerated Code use double-precision" OFF)
 option(MKLFFT "Use MKL rather than FFTW for FFT" OFF)
 option(CudaTexture "CudaTexture" ON)
-option(ALLOW_CTF_IN_SAGD "Allow CTF-modulation in SAGD, as specified in Claim 1 of patent US10,282,513B2" ON)
-
-if(ALLOW_CTF_IN_SAGD)
-    message(STATUS "ALLOW_CTF_IN_SAGD enabled - This build of RELION allows modulation of particle images by a contrast transfer function inside stochastic average gradient descent, as specified in Claim 1 of patent US10,282,513B2")
-else()
-    message(STATUS "ALLOW_CTF_IN_SAGD disabled - This build of RELION does not allow modulation of particle images by a contrast transfer function inside stochastic average gradient descent, as specified in Claim 1 of patent US10,282,513B2")
-endif()
 
 if(ALTCPU)
     message(STATUS "ALTCPU enabled - Building CPU-accelerated version of RELION")
@@ -134,6 +127,11 @@ else(DoublePrec_ACC)
     message(STATUS "Setting accelerated code precision to single")
 endif(DoublePrec_ACC)
 
+if(MDT_TYPE_CHECK)
+    message("-- MetaDataTable type check is enabled.")
+    add_definitions(-DMETADATA_TABLE_TYPE_CHECK)
+endif()
+
 # ----------------------------------------------------------INCLUDE ALL BUILD TYPES--
  #This *has* to be AFTER project()
 include(${CMAKE_SOURCE_DIR}/cmake/BuildTypes.cmake)
@@ -155,7 +153,7 @@ if(CUDA_FOUND)
     endif()
     
     if(CUDA)
-        add_definitions(-DCUDA)
+        add_definitions(-D_CUDA_ENABLED)
     endif()
 else(CUDA_FOUND)
     message(STATUS "Using non-cuda compilation....")
@@ -278,10 +276,6 @@ if(ALTCPU)
     add_definitions(-DALTCPU)
 endif()
 
-if(ALLOW_CTF_IN_SAGD)
-    add_definitions(-DALLOW_CTF_IN_SGD)
-endif()
-
 # ---------------------------------------------------------------USE TEXTURES OR NOT--
 if(NOT CudaTexture OR ALTCPU)
     add_definitions(-DPROJECTOR_NO_TEXTURES)
@@ -367,19 +361,39 @@ if(PNG_FOUND)
 	add_definitions(-DHAVE_PNG)
 endif()
 
+
+# -----------------------------------------------------------------------------Torch--
+
+#option(TORCH "Enable support for LibTorch" OFF)
+#if(TORCH)
+#    message(STATUS "Torch support requested by user.")
+#    include(${CMAKE_SOURCE_DIR}/cmake/BuildTorch.cmake)
+#    add_definitions(-D_TORCH_ENABLED)
+#endif(TORCH)
+
+option(FETCH_TORCH_MODELS "Do download pre-trained torch models" ON)
+if (FETCH_TORCH_MODELS)
+    include(${CMAKE_SOURCE_DIR}/cmake/FetchTorchModels.cmake)
+endif()
+
 # ----------------------------------------------------------------------COPY SCRIPTS--
 
 if(FORCE_OWN_FFTW)
     install(DIRECTORY external/fftw/lib/ DESTINATION lib FILES_MATCHING PATTERN "*")
 endif()
 
-list(APPEND RELION_SCRIPT_FILES star_printtable 
-                                star_plottable
-                                star_loopheader
-                                star_datablock_stack
-                                star_datablock_singlefiles
-                                star_datablock_ctfdat
-                                qsub.csh)
+list(APPEND RELION_SCRIPT_FILES
+        star_printtable
+        star_plottable
+        star_loopheader
+        star_datablock_stack
+        star_datablock_singlefiles
+        star_datablock_ctfdat
+        qsub.csh
+        it.py
+        schemegui.py
+        class_ranker.py
+)
 
 add_custom_target(copy_scripts ALL)
                                 
@@ -389,6 +403,7 @@ foreach (SCRIPT_FILE ${RELION_SCRIPT_FILES})
                      copy ${CMAKE_SOURCE_DIR}/scripts/${SCRIPT_FILE} 
                      ${CMAKE_BINARY_DIR}/bin/relion_${SCRIPT_FILE} )
 endforeach()
+
 install( DIRECTORY ${CMAKE_BINARY_DIR}/bin
 	 DESTINATION ${CMAKE_INSTALL_PREFIX}
          USE_SOURCE_PERMISSIONS
@@ -413,7 +428,6 @@ ADD_SUBDIRECTORY(src/apps)
 
 #message(STATUS "CUDA option = ${CUDA}")
 #message(STATUS "ALTCPU option = ${ALTCPU}")
-#message(STATUS "ALLOW_CTF_IN_SAGD option = ${ALLOW_CTF_IN_SAGD}")
 #message(STATUS "DoublePrec_CPU option = ${DoublePrec_CPU}")
 #message(STATUS "DoublePrec_ACC option = ${DoublePrec_ACC}")
 #message(STATUS "MKLFFT option = ${MKLFFT}")

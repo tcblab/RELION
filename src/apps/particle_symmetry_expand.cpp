@@ -23,7 +23,7 @@
 #include <src/symmetries.h>
 #include <src/euler.h>
 #include <src/time.h>
-#include <src/jaz/obs_model.h>
+#include <src/jaz/single_particle/obs_model.h>
 
 class particle_symmetry_expand_parameters
 {
@@ -127,7 +127,7 @@ public:
 			ObservationModel::loadSafely(fn_in, obsModel, DFi, "particles", 1, false);
 			if (obsModel.opticsMdt.numberOfObjects() == 0)
 			{
-				std::cerr << " + WARNGING: could not read optics groups table, proceeding without it ..." << std::endl;
+				std::cerr << " + WARNING: could not read optics groups table, proceeding without it ..." << std::endl;
 				DFi.read(fn_in);
 				do_ignore_optics = true;
 			}

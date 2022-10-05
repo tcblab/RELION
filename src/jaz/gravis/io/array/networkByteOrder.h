@@ -10,8 +10,8 @@
 #ifndef _T_ARRAY_IO_NETWORK_BYTE_ORDER_H_
 #define _T_ARRAY_IO_NETWORK_BYTE_ORDER_H_
 
-#include <gravis/tArray.h>
-#include <gravis/Exception.h>
+#include <src/jaz/gravis/tArray.h>
+#include <src/jaz/gravis/Exception.h>
 #include <fstream>
 #include <string>
 

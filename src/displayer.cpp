@@ -387,7 +387,8 @@ int basisViewerWindow::fillCanvas(int viewer_type, MetaDataTable &MDin, Observat
 
 int basisViewerWindow::fillPickerViewerCanvas(MultidimArray<RFLOAT> image, RFLOAT _minval, RFLOAT _maxval, RFLOAT _sigma_contrast,
                                               RFLOAT _scale, RFLOAT _coord_scale, int _particle_radius, bool _do_startend, FileName _fn_coords,
-                                              FileName _fn_color, FileName _fn_mic, FileName _color_label, RFLOAT _color_blue_value, RFLOAT _color_red_value)
+                                              FileName _fn_color, FileName _fn_mic, FileName _color_label, RFLOAT _color_blue_value, RFLOAT _color_red_value,
+											  RFLOAT _minimum_pick_fom)
 {
 	current_selection_type = 2; // Green
 
@@ -407,6 +408,7 @@ int basisViewerWindow::fillPickerViewerCanvas(MultidimArray<RFLOAT> image, RFLOA
 	canvas.color_label = EMDL::str2Label(_color_label);
 	canvas.smallest_color_value = XMIPP_MIN(_color_blue_value, _color_red_value);
 	canvas.biggest_color_value = XMIPP_MAX(_color_blue_value, _color_red_value);
+	canvas.minimum_pick_fom = _minimum_pick_fom;
 	canvas.do_blue_to_red = (_color_blue_value < _color_red_value);
 	canvas.do_read_whole_stacks = false;
 	if (_fn_coords != "" && exists(_fn_coords))
@@ -1588,6 +1590,18 @@ void basisViewerCanvas::setSelectionType()
 	win.fill();
 }
 
+void basisViewerCanvas::setFOMThreshold()
+{
+	const char *pfom;
+	std::string currentval = floatToString(minimum_pick_fom);
+	pfom =  fl_input("Minimum rlnAutopickFigureOfMerit to display: ", currentval.c_str());
+	if (pfom == NULL)
+		return;
+	std::string newval(pfom);
+	minimum_pick_fom = textToFloat(newval);
+
+}
+
 int popupSelectionTypeWindow::fill()
 {
 	color(GUI_BACKGROUND_COLOR);
@@ -1762,6 +1776,13 @@ void pickerViewerCanvas::draw()
 		MDcoords.getValue(EMDL_IMAGE_COORD_X, xcoor);
 		MDcoords.getValue(EMDL_IMAGE_COORD_Y, ycoor);
 
+		if (MDcoords.containsLabel(EMDL_PARTICLE_AUTOPICK_FOM) && fabs(minimum_pick_fom + 9999.) > 1e-6)
+		{
+			RFLOAT fom;
+			MDcoords.getValue(EMDL_PARTICLE_AUTOPICK_FOM, fom);
+			if (fom < minimum_pick_fom) continue;
+		}
+
 		if (color_label != EMDL_UNDEFINED)
 		{
 			RFLOAT colval;
@@ -1924,6 +1945,7 @@ int pickerViewerCanvas::handle(int ev)
 				{ "Reload coordinates" },
 				{ "Clear coordinates" },
 				{ "Set selection type" },
+				{ "Set FOM threshold" },
 				{ "Help" },
 				{ "Quit (CTRL-q)" },
 				{ 0 }
@@ -1943,6 +1965,11 @@ int pickerViewerCanvas::handle(int ev)
 				clearCoordinates();
 			else if ( strcmp(m->label(), "Set selection type") == 0)
 				setSelectionType();
+			else if ( strcmp(m->label(), "Set FOM threshold") == 0)
+			{
+				setFOMThreshold();
+				loadCoordinates(false);
+			}
 			else if ( strcmp(m->label(), "Help") == 0 )
 				printHelp();
 			else if ( strcmp(m->label(), "Quit (CTRL-q)") == 0 )
@@ -2226,8 +2253,8 @@ int displayerGuiWindow::fill(FileName &_fn_in)
 		reverse_sort_button->color(GUI_INPUT_COLOR);
 		apply_orient_button  = new Fl_Check_Button(x, y, inputwidth, height, "Apply orientations?");
 		apply_orient_button->color(GUI_INPUT_COLOR);
-		read_whole_stack_button = new Fl_Check_Button(x+160, y, inputwidth, height, "Read whole stacks?");
-		read_whole_stack_button->color(GUI_INPUT_COLOR);
+		display_label_button = new Fl_Check_Button(x+160, y, inputwidth, height, "Display label?");
+		display_label_button->color(GUI_INPUT_COLOR);
 		y += ROUND(1.75*ystep);
 
 	}
@@ -2432,13 +2459,17 @@ void displayerGuiWindow::cb_display_i()
 			else
 			{
 				cl += " --sort " + (std::string)m2->label();
+
 				if (getValue(reverse_sort_button))
 					cl += " --reverse ";
 			}
 		}
 
-		if (getValue(read_whole_stack_button))
-			cl += " --read_whole_stack ";
+		if (getValue(display_label_button))
+		{
+			const Fl_Menu_Item* m2 = sort_choice->mvalue();
+			cl += " --text_label " + (std::string)m2->label();
+		}
 
 		if (getValue(apply_orient_button))
 			cl += " --apply_orient ";
@@ -2503,6 +2534,61 @@ void displayerGuiWindow::cb_display_i()
 	int res = system(cl.c_str());
 }
 
+
+void Displayer::topazDenoiseMap(FileName fn_in, FileName fn_odir, Image<RFLOAT> &img)
+{
+
+    if (fn_odir[fn_odir.length()-1] != '/')
+             fn_odir += "/";
+
+	if (!(exists(fn_odir)))
+	{
+		std::string command = "mkdir -p " + fn_odir;
+		int res = system(command.c_str());
+	}
+
+	// Now generate the topaz bash script
+	FileName fn_script = fn_odir+"topaz_denoise.bash";
+	FileName fn_log    = fn_odir+"topaz_denoise.out";
+	FileName fn_out = fn_odir + fn_in.afterLastOf("/");
+	std::ofstream  fh;
+	fh.open((fn_script).c_str(), std::ios::out);
+	if (!fh)
+	 REPORT_ERROR( (std::string)"AutoPicker::trainTopaz cannot create file: " + fn_script);
+
+	fh << "#!" << fn_shell  << std::endl;
+
+	// Call Topaz to train the network
+	fh << fn_topaz_exe << " denoise ";
+	fh << fn_in;
+	fh << " --output " << fn_odir;
+	fh << " --device 0"; // pyTorch threads
+	fh << " --patch-size 1024";
+	fh << " --patch-padding 256";
+	fh << " --normalize";
+	fh << std::endl;
+	fh.close();
+
+	std::string command = fn_shell + " " + fn_script + " >> " + fn_log + " 2>&1";
+	if (system(command.c_str()))
+	{
+		std::string warning = "WARNING: there was an error in executing: " + fn_script + "\nWARNING: skipping topaz denoising...";
+		fl_message("%s", warning.c_str());
+		img.read(fn_in);
+	}
+	else
+	{
+
+		// Now read the denoise micrograph back in
+		img.read(fn_out);
+		std::remove(fn_out.c_str());
+		std::remove(fn_script.c_str());
+		std::remove(fn_log.c_str());
+	}
+
+}
+
+
 void Displayer::read(int argc, char **argv)
 {
 	parser.setCommandLine(argc, argv);
@@ -2537,7 +2623,7 @@ void Displayer::read(int argc, char **argv)
 	sort_label = EMDL::str2Label(parser.getOption("--sort", "Metadata label to sort images on", "EMDL_UNDEFINED"));
 	random_sort = parser.checkOption("--random_sort", "Use random order in the sorting");
 	reverse_sort = parser.checkOption("--reverse", "Use reverse order (from high to low) in the sorting");
-	do_class = parser.checkOption("--class", "Use this to analyse classes in input model.star file");
+	do_class = parser.checkOption("--class", "Use this to analyse classes in input optimiser.star or model.star file");
 	nr_regroups = textToInteger(parser.getOption("--regroup", "Number of groups to regroup saved particles from selected classes in (default is no regrouping)", "-1"));
 	do_allow_save = parser.checkOption("--allow_save", "Allow saving of selected particles or class averages");
 
@@ -2554,8 +2640,12 @@ void Displayer::read(int argc, char **argv)
 	coord_scale = textToFloat(parser.getOption("--coord_scale", "Scale particle coordinates before display", "1.0"));
 	particle_radius = textToFloat(parser.getOption("--particle_radius", "Particle radius in pixels", "100"));
 	particle_radius *= coord_scale;
+	do_topaz_denoise = parser.checkOption("--topaz_denoise", "Use Topaz denoising before picking (on GPU 0)");
+	fn_topaz_exe = parser.getOption("--topaz_exe", "Name of topaz executable", "topaz");
+        fn_shell = parser.getOption("--bash_exe", "Name of bash shell executable", "/bin/bash");
 	lowpass = textToFloat(parser.getOption("--lowpass", "Lowpass filter (in A) to filter micrograph before displaying", "0"));
 	highpass = textToFloat(parser.getOption("--highpass", "Highpass filter (in A) to filter micrograph before displaying", "0"));
+	minimum_pick_fom = textToFloat(parser.getOption("--minimum_pick_fom", "Minimum value for rlnAutopickFigureOfMerit to display picks", "-9999."));
 	fn_color = parser.getOption("--color_star", "STAR file with a column for red-blue coloring (a subset of) the particles", "");
 	color_label = parser.getOption("--color_label", "MetaDataLabel to color particles on (e.g. rlnParticleSelectZScore)", "");
 	color_blue_value = textToFloat(parser.getOption("--blue", "Value of the blue color", "1."));
@@ -2587,20 +2677,28 @@ void Displayer::initialise()
 	{
 		display_label = EMDL_MLMODEL_REF_IMAGE;
 		table_name = "model_classes";
-		FileName fn_data;
+		FileName fn_data, fn_model = fn_in;
 		if (fn_in.contains("_half1_model.star"))
 			fn_data = fn_in.without("_half1_model.star") + "_data.star";
 		else if (fn_in.contains("_half2_model.star"))
 			fn_data = fn_in.without("_half2_model.star") + "_data.star";
-		else
+		// SHWS 28nov2019: backwards compatibility
+		else if (fn_in.contains("_model.star"))
 			fn_data = fn_in.without("_model.star") + "_data.star";
+		else if (fn_in.contains("_optimiser.star"))
+		{
+			fn_data = fn_in.without("_optimiser.star") + "_data.star";
+			MetaDataTable MDopt;
+			MDopt.read(fn_in, "optimiser_general");
+			MDopt.getValue(EMDL_OPTIMISER_MODEL_STARFILE, fn_model);
+		}
 
 		if (do_ignore_optics) MDdata.read(fn_data);
 		else ObservationModel::loadSafely(fn_data, obsModel, MDdata);
 
 		// If regrouping, also read the model_groups table into memory
 		if (nr_regroups > 0)
-			MDgroups.read(fn_in, "model_groups");
+			MDgroups.read(fn_model, "model_groups");
 	}
 
 	// Also allow regrouping on data.star
@@ -2648,7 +2746,7 @@ void Displayer::initialise()
 			obsModel.opticsMdt.addObject();
 			if (angpix > 0.)
 			{
-				std::cout << " Using pixel size from command-line input of " << angpix << " Angstroms" << std::endl;
+				//std::cout << " Using pixel size from command-line input of " << angpix << " Angstroms" << std::endl;
 				obsModel.opticsMdt.setValue(EMDL_IMAGE_PIXEL_SIZE, angpix);
 			}
 			else
@@ -2725,7 +2823,19 @@ int Displayer::runGui()
 		win.is_star = true;
 		win.is_multi = true;
 		win.is_data = fn_in.contains("_data.star");
-		if (fn_in.contains("_model.star"))
+		if (fn_in.contains("_optimiser.star"))
+		{
+			win.fn_data = fn_in.without("_optimiser.star") + "_data.star";
+			win.is_class = true;
+
+			MetaDataTable MDopt;
+			MDopt.read(fn_in, "optimiser_general");
+			FileName fn_model;
+			MDopt.getValue(EMDL_OPTIMISER_MODEL_STARFILE, fn_model);
+			MD.read(fn_model, "model_classes");
+		}
+		// SHWS 28nov2019: backwards compatibility
+		else if (fn_in.contains("_model.star"))
 		{
 			win.fn_data = fn_in.without("_model.star") + "_data.star";
 			win.is_class = true;
@@ -2796,21 +2906,39 @@ void Displayer::run()
 	else if (do_pick || do_pick_startend)
 	{
 		Image<RFLOAT> img;
-		img.read(fn_in); // dont read data yet: only header to get size
+
+		if (do_topaz_denoise)
+		{
+			topazDenoiseMap(fn_in, fn_coords.beforeLastOf("/"), img);
+		}
+		else
+		{
+			img.read(fn_in); // dont read data yet: only header to get size
+		}
 
 		if (lowpass > 0.)
 			lowPassFilterMap(img(), lowpass, angpix);
 		if (highpass > 0.)
 			highPassFilterMap(img(), highpass, angpix, 25); // use a rather soft high-pass edge of 25 pixels wide
+
 		basisViewerWindow win(CEIL(scale*XSIZE(img())), CEIL(scale*YSIZE(img())), fn_in.c_str());
 		if (fn_coords=="")
 			fn_coords = fn_in.withoutExtension()+"_coords.star";
 		win.fillPickerViewerCanvas(img(), minval, maxval, sigma_contrast, scale, coord_scale, ROUND(scale*particle_radius), do_pick_startend, fn_coords,
-    		fn_color, fn_in, color_label, color_blue_value, color_red_value);
+    		fn_color, fn_in, color_label, color_blue_value, color_red_value, minimum_pick_fom);
 	}
 	else if (fn_in.isStarFile())
 	{
-		if (fn_in.contains("_model.star"))
+		if (fn_in.contains("_optimiser.star"))
+		{
+			MetaDataTable MDopt;
+			MDopt.read(fn_in, "optimiser_general");
+			FileName fn_model;
+			MDopt.getValue(EMDL_OPTIMISER_MODEL_STARFILE, fn_model);
+			MDin.read(fn_model, "model_classes");
+		}
+		// SHWS 28nov2019: Backwards compatibility
+		else if (fn_in.contains("_model.star"))
 		{
 			MDin.read(fn_in, "model_classes");
 			MetaDataTable MD2;

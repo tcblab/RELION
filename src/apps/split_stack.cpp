@@ -8,9 +8,9 @@
 #include <src/fftw.h>
 #include <src/complex.h>
 #include <src/metadata_table.h>
-#include <src/jaz/slice_helper.h>
-#include <src/jaz/img_proc/filter_helper.h>
-#include <src/jaz/volume_converter.h>
+#include <src/jaz/single_particle/slice_helper.h>
+#include <src/jaz/single_particle/img_proc/filter_helper.h>
+#include <src/jaz/single_particle/volume_converter.h>
 
 #include <src/jaz/gravis/t4Matrix.h>
 using namespace gravis;

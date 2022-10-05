@@ -58,6 +58,11 @@ void Reconstructor::read(int argc, char **argv)
 	helical_rise = textToFloat(parser.getOption("--helical_rise", "Helical rise (in Angstroms)", "0."));
 	helical_twist = textToFloat(parser.getOption("--helical_twist", "Helical twist (in degrees, + for right-handedness)", "0."));
 
+	int subtomogram_section = parser.addSection("Subtomogram averaging");
+	normalised_subtomo = parser.checkOption("--normalised_subtomo", "Have subtomograms been multiplicity normalised? (Default=False)");
+	skip_subtomo_correction = parser.checkOption("--skip_subtomo_multi", "Skip subtomo multiplicity correction? (For nomalised subtomos only)");
+	ctf3d_squared = !parser.checkOption("--ctf3d_not_squared", "CTF3D files contain sqrt(CTF^2) patterns");
+
 	int expert_section = parser.addSection("Expert options");
 	fn_sub = parser.getOption("--subtract","Subtract projections of this map from the images used for reconstruction", "");
 	if (parser.checkOption("--NN", "Use nearest-neighbour instead of linear interpolation before gridding correction"))
@@ -76,7 +81,7 @@ void Reconstructor::read(int argc, char **argv)
 	do_3d_rot = parser.checkOption("--3d_rot", "Perform 3D rotations instead of backprojections from 2D images");
 	ctf_dim  = textToInteger(parser.getOption("--reconstruct_ctf", "Perform a 3D reconstruction from 2D CTF-images, with the given size in pixels", "-1"));
 	do_reconstruct_ctf2 = parser.checkOption("--ctf2", "Reconstruct CTF^2 and then take the sqrt of that");
-	skip_gridding = parser.checkOption("--skip_gridding", "Skip gridding part of the reconstruction");
+	skip_gridding = !parser.checkOption("--dont_skip_gridding", "Perform gridding in the reconstruction (obsolete?)");
 	fn_debug = parser.getOption("--debug", "Rootname for debug reconstruction files", "");
 	debug_ori_size =  textToInteger(parser.getOption("--debug_ori_size", "Rootname for debug reconstruction files", "1"));
 	debug_size =  textToInteger(parser.getOption("--debug_size", "Rootname for debug reconstruction files", "1"));
@@ -138,7 +143,9 @@ void Reconstructor::initialise()
 	data_dim = 2; // Initial default value
 
 	if (fn_noise != "")
-		model.read(fn_noise);
+	{
+		model.read(fn_noise, obsModel.numberOfOpticsGroups());
+	}
 
 	// Get dimension of the images
 	if (do_reconstruct_ctf)
@@ -210,6 +217,7 @@ void Reconstructor::initialise()
 		r_max = -1;
 	else
 		r_max = CEIL(output_boxsize * angpix / maxres);
+
 }
 
 void Reconstructor::run()
@@ -319,9 +327,11 @@ void Reconstructor::backprojectOneParticle(long int p)
 {
 	RFLOAT rot, tilt, psi, fom, r_ewald_sphere;
 	Matrix2D<RFLOAT> A3D;
-	MultidimArray<RFLOAT> Fctf;
+	MultidimArray<RFLOAT> Fctf, FstMulti;
 	Matrix1D<RFLOAT> trans(2);
 	FourierTransformer transformer;
+
+	bool do_subtomo_correction = false;
 
 	int randSubset = 0, classid = 0;
 	DF.getValue(EMDL_PARTICLE_RANDOM_SUBSET, randSubset, p);
@@ -438,29 +448,9 @@ void Reconstructor::backprojectOneParticle(long int p)
 
 	if (fn_noise != "")
 	{
-		// TODO: Refactor code duplication from relion_project!
-		FileName fn_group;
-		if (DF.containsLabel(EMDL_MLMODEL_GROUP_NAME))
-			DF.getValue(EMDL_MLMODEL_GROUP_NAME, fn_group);
-		else if (DF.containsLabel(EMDL_MICROGRAPH_NAME))
-			DF.getValue(EMDL_MICROGRAPH_NAME, fn_group);
-		else
-			REPORT_ERROR("ERROR: cannot find rlnGroupName or rlnMicrographName in the input --i file...");
 
-		int my_mic_id = -1;
-		for (int mic_id = 0; mic_id < model.group_names.size(); mic_id++)
-		{
-			if (fn_group == model.group_names[mic_id])
-			{
-				my_mic_id = mic_id;
-				break;
-			}
-		}
-
-		if (my_mic_id < 0) REPORT_ERROR("ERROR: cannot find " + fn_group + " in the input model file...");
-
-		RFLOAT normcorr = 1.;
-		if (DF.containsLabel(EMDL_IMAGE_NORM_CORRECTION)) DF.getValue(EMDL_IMAGE_NORM_CORRECTION, normcorr);
+		int optics_group = 0;
+		DF.getValue(EMDL_IMAGE_OPTICS_GROUP, optics_group);
 
 		// Make coloured noise image
 		FOR_ALL_ELEMENTS_IN_FFTW_TRANSFORM(F2D)
@@ -468,7 +458,7 @@ void Reconstructor::backprojectOneParticle(long int p)
 			int ires = ROUND(sqrt((RFLOAT)(kp*kp + ip*ip + jp*jp)));
 			ires = XMIPP_MIN(ires, myBoxSize/2); // at freqs higher than Nyquist: use last sigma2 value
 
-			RFLOAT sigma = sqrt(DIRECT_A1D_ELEM(model.sigma2_noise[my_mic_id], ires));
+			RFLOAT sigma = sqrt(DIRECT_A1D_ELEM(model.sigma2_noise[optics_group], ires));
 			DIRECT_A3D_ELEM(F2D, k, i, j).real += rnd_gaus(0., sigma);
 			DIRECT_A3D_ELEM(F2D, k, i, j).imag += rnd_gaus(0., sigma);
 		}
@@ -503,7 +493,52 @@ void Reconstructor::backprojectOneParticle(long int p)
 			// otherwise, just window the CTF to the current resolution
 			else if (XSIZE(Ictf()) == YSIZE(Ictf()) / 2 + 1)
 			{
-				windowFourierTransform(Ictf(), Fctf, YSIZE(Fctf));
+				// If subtomos are not normalised MULTI is included and we don't need to read it
+				if (ZSIZE(Ictf()) == YSIZE(Ictf()))
+				{
+					windowFourierTransform(Ictf(), Fctf, YSIZE(Fctf));
+				}
+				else if (ZSIZE(Ictf()) == YSIZE(Ictf())*2) // Subtomo multiplicity weights included in the CTF file
+				{
+					MultidimArray<RFLOAT> &Mctf = Ictf();
+					long int max_r2 = (XSIZE(Mctf) - 1) * (XSIZE(Mctf) - 1);
+
+					if (!normalised_subtomo || skip_subtomo_correction)
+					{
+						FOR_ALL_ELEMENTS_IN_FFTW_TRANSFORM(Fctf)
+						{
+							// Make sure windowed FT has nothing in the corners, otherwise we end up with an asymmetric FT!
+							if (kp * kp + ip * ip + jp * jp <= max_r2)
+							{
+								FFTW_ELEM(Fctf, kp, ip, jp) = DIRECT_A3D_ELEM(Mctf, ((kp < 0) ? (kp + YSIZE(Mctf)) : (kp)), \
+								((ip < 0) ? (ip + YSIZE(Mctf)) : (ip)), jp);
+							}
+							else
+								FFTW_ELEM(Fctf, kp, ip, jp) = 0.;
+						}
+					}
+					else
+					{
+						FstMulti.resize(F2D);
+						do_subtomo_correction = true;
+						FOR_ALL_ELEMENTS_IN_FFTW_TRANSFORM(Fctf)
+						{
+							// Make sure windowed FT has nothing in the corners, otherwise we end up with an asymmetric FT!
+							if (kp * kp + ip * ip + jp * jp <= max_r2)
+							{
+								FFTW_ELEM(Fctf, kp, ip, jp) = DIRECT_A3D_ELEM(Mctf, ((kp < 0) ? (kp + YSIZE(Mctf)): (kp)), \
+								((ip < 0) ? (ip + YSIZE(Mctf)) : (ip)), jp);
+								FFTW_ELEM(FstMulti, kp, ip, jp) = DIRECT_A3D_ELEM(Mctf, ((kp < 0) ? (kp + ZSIZE(Mctf)) : (kp + YSIZE(Mctf))), \
+								((ip < 0) ? (ip + YSIZE(Mctf)) : (ip)), jp);
+							}
+							else
+							{
+								FFTW_ELEM(Fctf, kp, ip, jp) = 0.;
+								FFTW_ELEM(FstMulti, kp, ip, jp) = 0.;
+							}
+						}
+					}
+				}
 			}
 			// if dimensions are neither cubical nor FFTW, stop
 			else
@@ -601,9 +636,33 @@ void Reconstructor::backprojectOneParticle(long int p)
 					DIRECT_MULTIDIM_ELEM(F2D, n)  *= DIRECT_MULTIDIM_ELEM(Fctf, n);
 				}
 			}
-			FOR_ALL_DIRECT_ELEMENTS_IN_MULTIDIMARRAY(Fctf)
+			if (do_subtomo_correction && normalised_subtomo) // Subtomos have always to be reconstructed ctf_premultiplied
 			{
-				DIRECT_MULTIDIM_ELEM(Fctf, n) *= DIRECT_MULTIDIM_ELEM(Fctf, n);
+				if (ctf3d_squared)
+				{
+					Image<RFLOAT> tt;
+					FOR_ALL_DIRECT_ELEMENTS_IN_MULTIDIMARRAY(F2D)
+					{
+						DIRECT_MULTIDIM_ELEM(F2D, n)  *= DIRECT_MULTIDIM_ELEM(FstMulti, n);
+						DIRECT_MULTIDIM_ELEM(Fctf, n) *= DIRECT_MULTIDIM_ELEM(FstMulti, n);
+					}
+				}
+				else
+				{
+					Image<RFLOAT> tt;
+					FOR_ALL_DIRECT_ELEMENTS_IN_MULTIDIMARRAY(F2D)
+					{
+						DIRECT_MULTIDIM_ELEM(F2D, n)  *= DIRECT_MULTIDIM_ELEM(FstMulti, n);
+						DIRECT_MULTIDIM_ELEM(Fctf, n) *= DIRECT_MULTIDIM_ELEM(Fctf, n) * DIRECT_MULTIDIM_ELEM(FstMulti, n);
+					}
+				}
+			}
+			else if (data_dim == 2 || !ctf3d_squared)
+			{
+				FOR_ALL_DIRECT_ELEMENTS_IN_MULTIDIMARRAY(Fctf)
+				{
+					DIRECT_MULTIDIM_ELEM(Fctf, n) *= DIRECT_MULTIDIM_ELEM(Fctf, n);
+				}
 			}
 		}
 

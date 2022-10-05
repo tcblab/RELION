@@ -27,10 +27,10 @@
 #include  <stdlib.h>
 #include  <unistd.h>
 #include  <stdio.h>
-#include "src/metadata_table.h"
-#include "src/image.h"
+#include <src/metadata_table.h>
+#include <src/image.h>
 #include <src/time.h>
-#include "src/jaz/obs_model.h"
+#include <src/jaz/single_particle/obs_model.h>
 
 class CtffindRunner
 {
@@ -161,7 +161,7 @@ public:
 	void usage();
 
 	// Initialise some stuff after reading
-	void initialise();
+	void initialise(bool is_leader = true);
 
 	// Execute all CTFFIND jobs to get CTF parameters
 	void run();

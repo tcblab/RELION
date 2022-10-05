@@ -18,8 +18,8 @@
 #ifndef __GRAVIS__IO__ARRAY__MATLAB__
 #define __GRAVIS__IO__ARRAY__MATLAB__
 
-#include <gravis/tArray.h>
-#include <gravis/Exception.h>
+#include <src/jaz/gravis/tArray.h>
+#include <src/jaz/gravis/Exception.h>
 
 #ifdef __GRAVIS__MATLAB__
 #include <mat.h>

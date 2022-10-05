@@ -120,7 +120,9 @@ namespace gravis
       void write(const std::string&) const;
       void writePNM (const std::string&) const;
       void writePNG (const std::string&) const;
-      //void writeJPG (const std::string&, int quality=100) const;
+#ifdef JPEG_FOUND
+      void writeJPG (const std::string&, int quality=100) const;
+#endif
 
       /**
        * Interpolated access to the image
@@ -185,7 +187,7 @@ namespace gravis
       inline
       T access(const int& x, const int& y) const
       {
-        return access::Repeat::getPixel(*this, x, y);
+        return image_access::Repeat::getPixel(*this, x, y);
       }
 
       /**
@@ -258,7 +260,7 @@ namespace gravis
        **/
       tImage convolve(const tImage< typename tImageTraits<T>::Float_t >& kernel) const
       {
-        return (*this).template convolve<access::Repeat>(kernel);
+        return (*this).template convolve<image_access::Repeat>(kernel);
       }
 
       /** Clamp an image by calling the clamp() method on each element **/
@@ -292,7 +294,7 @@ namespace gravis
 #include "private/tImageConverter.hxx"
 #include "private/tImageIO_PNM.hxx"
 #include "private/tImageIO_PNG.hxx"
-//#include "private/tImageIO_JPG.hxx"
+#include "private/tImageIO_JPG.hxx"
 
 namespace gravis
 {
@@ -683,14 +685,14 @@ namespace gravis
   inline
   void tImage<T>::read (const std::string& filename)
   {
-
-/*    if (priv::JPGImageReader<T>::canHandle(filename))
+#ifdef JPEG_FOUND
+    if (priv::JPGImageReader<T>::canHandle(filename))
     {
       priv::JPGImageReader<T> reader;
       reader.read(*this,  filename);
       return;
     }
-*/
+#endif
 
     char header[512];
 
@@ -724,12 +726,18 @@ namespace gravis
   inline
   void tImage<T>::write(const std::string& filename) const
   {
-    if /* (has_ending(filename, "jpg") || has_ending(filename, "jpeg"))
-      writeJPG(filename);
-    else if*/ (has_ending(filename, "png"))
+    if (has_ending(filename, "jpg") || has_ending(filename, "jpeg"))
+    {
+#ifdef JPEG_FOUND
+     writeJPG(filename);
+#else
+     GRAVIS_THROW3(gravis::Exception, "libjpeg was not linked during compilation so we cannot read: ", filename);
+#endif
+    }
+    else if (has_ending(filename, "png"))
       writePNG(filename);
-    else if (has_ending(filename, "pnm"))
-      writePNM(filename);
+    /*else if (has_ending(filename, "pnm"))
+      writePNM(filename);*/
     else
       GRAVIS_THROW3(gravis::Exception, "Could not determine filetype from filename: ", filename);
   }
@@ -750,8 +758,7 @@ namespace gravis
     writer.write(*this, filename.c_str());
   }
 
-
-/*
+#ifdef JPEG_FOUND
   template <class T>
   inline
   void tImage<T>::writeJPG (const std::string& filename, int quality) const
@@ -759,7 +766,7 @@ namespace gravis
     priv::JPGImageWriter<T> writer;
     writer.write(*this, filename.c_str(), quality);
   }
-*/
+#endif
 
 } /* Close namespace "gravis" */
 

@@ -34,7 +34,7 @@
 #include "src/mask.h"
 #include "src/tabfuncs.h"
 #include "src/symmetries.h"
-#include "src/jaz/complex_io.h"
+#include <src/jaz/single_particle/complex_io.h>
 
 class BackProjector: public Projector
 {
@@ -59,6 +59,8 @@ public:
 
 	// Skip the iterative gridding part of the reconstruction
 	bool skip_gridding;
+
+	MultidimArray<RFLOAT> mom1_noise_power;
 
 public:
 
@@ -284,8 +286,10 @@ public:
 	                      MultidimArray<RFLOAT> &evidence_vs_prior_out,
 	                      MultidimArray<RFLOAT> &fourier_coverage_out,
 	                      const MultidimArray<RFLOAT>& fsc,
+                          const MultidimArray<RFLOAT>& avgctf2,
 	                      bool update_tau2_with_fsc = false,
-	                      bool is_whole_instead_of_half = false);
+	                      bool is_whole_instead_of_half = false,
+                          bool correct_tau2_by_avgctf2 = false);
 
 	/* Get the 3D reconstruction, but perform it through a system call outside relion_refine!
 	*/
@@ -312,6 +316,41 @@ public:
 	                 int minres_map = -1,
 	                 bool printTimes= false,
 	                 Image<RFLOAT>* weight_out = 0);
+
+	void reweightGrad();
+
+	/*
+	 * Calculate the first moment of the gradient
+	 */
+	void getFristMoment(
+			MultidimArray<Complex> &mom,
+			RFLOAT lambda=0.9);
+
+	/*
+	 * Calculate the second moment of the gradient
+	 */
+	void getSecondMoment(
+			MultidimArray<Complex> &mom,
+			MultidimArray<Complex> &data_other,
+			RFLOAT lambda=0.999);
+
+	/*
+	 * Combine statistics from two half-set gradients with first and second moment
+	 * and calculate the FSC estimate
+	 */
+	void applyMomenta(
+			MultidimArray<Complex> &mom1_half1,
+			MultidimArray<Complex> &mom1_half2,
+			MultidimArray<Complex> &mom2);
+
+	void reconstructGrad(
+			MultidimArray<RFLOAT> &vol_out,
+			const MultidimArray<RFLOAT> &fsc_spectrum,
+			RFLOAT grad_stepsize=0.1,
+			RFLOAT tau2_fudge=2,
+			RFLOAT min_resol_shell=0,
+			bool use_fsc=true,
+			bool printTimes=false);
 
 	/*	Enforce Hermitian symmetry, apply helical symmetry as well as point-group symmetry
 	 */

@@ -20,7 +20,7 @@
 #include "src/ctffind_runner.h"
 #include <cmath>
 
-#ifdef CUDA
+#ifdef _CUDA_ENABLED
 #include "src/acc/cuda/cuda_mem_utils.h"
 #endif
 
@@ -93,7 +93,7 @@ void CtffindRunner::usage()
 	parser.writeUsage(std::cout);
 }
 
-void CtffindRunner::initialise()
+void CtffindRunner::initialise(bool is_leader)
 {
 	// Get the CTFFIND executable
 	if (fn_ctffind_exe == "")
@@ -112,7 +112,7 @@ void CtffindRunner::initialise()
 			fn_gctf_exe = (std::string)penv;
 	}
 
-	fn_shell = "csh";
+	fn_shell = "/bin/sh";
 	char *shell_name;
 	shell_name = getenv("RELION_SHELL");
 	if (shell_name != NULL)
@@ -138,7 +138,6 @@ void CtffindRunner::initialise()
 	// Make sure fn_out ends with a slash
 	if (fn_out[fn_out.length()-1] != '/')
 		fn_out += "/";
-
 
 	// Set up which micrographs to estimate CTFs from
 	if (fn_in.isStarFile())
@@ -291,34 +290,37 @@ void CtffindRunner::initialise()
 		}
 	}
 
-	if (false) {
+	if (is_leader)
+	{
 		std::cout << fn_mic_given_all.size() << " micrographs were given but we process only ";
 		std::cout  << do_at_most << " micrographs as specified in --do_at_most." << std::endl;
 	}
 
 	// Make symbolic links of the input micrographs in the output directory because ctffind and gctf write output files alongside the input micropgraph
-	char temp [180];
-	char *cwd = getcwd(temp, 180);
-	currdir = std::string(temp);
-	// Make sure fn_out ends with a slash
-	if (currdir[currdir.length()-1] != '/')
-		currdir += "/";
-	FileName prevdir="";
-	for (size_t i = 0; i < fn_micrographs.size(); i++)
+	if (is_leader)
 	{
-		FileName myname = fn_micrographs_ctf[i];
-		if (do_movie_thon_rings)
-			myname = myname.withoutExtension() + movie_rootname;
-		// Remove the UNIQDATE part of the filename if present
-		FileName output = getOutputFileWithNewUniqueDate(myname, fn_out);
-		// Create output directory if neccesary
-		FileName newdir = output.beforeLastOf("/");
-		if (newdir != prevdir)
+		char temp [180];
+		char *cwd = getcwd(temp, 180);
+		currdir = std::string(temp);
+		// Make sure fn_out ends with a slash
+		if (currdir[currdir.length()-1] != '/')
+			currdir += "/";
+		FileName prevdir="";
+		for (size_t i = 0; i < fn_micrographs.size(); i++)
 		{
-			std::string command = " mkdir -p " + newdir;
-			int res = system(command.c_str());
+			FileName myname = fn_micrographs_ctf[i];
+			if (do_movie_thon_rings)
+				myname = myname.withoutExtension() + movie_rootname;
+			// Remove the UNIQDATE part of the filename if present
+			FileName output = getOutputFileWithNewUniqueDate(myname, fn_out);
+			// Create output directory if neccesary
+			FileName newdir = output.beforeLastOf("/");
+			if (newdir != prevdir)
+			{
+				mktree(newdir);
+			}
+			symlink(currdir + myname, output);
 		}
-		int slk = symlink((currdir+myname).c_str(), output.c_str());
 	}
 
 	if (do_use_gctf && fn_micrographs.size()>0)
@@ -326,7 +328,7 @@ void CtffindRunner::initialise()
 		untangleDeviceIDs(gpu_ids, allThreadIDs);
 		if (allThreadIDs[0].size()==0 || (!std::isdigit(*gpu_ids.begin())) )
 		{
-#ifdef CUDA
+#ifdef _CUDA_ENABLED
 			if (verb>0)
 				std::cout << "gpu-ids were not specified, so threads will automatically be mapped to devices (incrementally)."<< std::endl;
 			HANDLE_ERROR(cudaGetDeviceCount(&devCount));
@@ -424,7 +426,7 @@ void CtffindRunner::joinCtffindResults()
 	long int barstep = XMIPP_MAX(1, fn_micrographs_all.size() / 60);
 	if (verb > 0)
 	{
-		std::cout << " Generating logfile.pdf ... " << std::endl;
+		std::cout << " Generating joint STAR file ... " << std::endl;
 		init_progress_bar(fn_micrographs_all.size());
 	}
 
@@ -474,6 +476,17 @@ void CtffindRunner::joinCtffindResults()
 
 	obsModel.save(MDctf, fn_out+"micrographs_ctf.star", "micrographs");
 
+	if (verb > 0)
+	{
+		progress_bar(fn_micrographs_all.size());
+		std::cout << " Done! Written out: " << fn_out <<  "micrographs_ctf.star" << std::endl;
+	}
+
+	if (verb > 0)
+	{
+		std::cout << " Now generating logfile.pdf ... " << std::endl;
+	}
+
 	std::vector<EMDLabel> plot_labels;
 	plot_labels.push_back(EMDL_CTF_DEFOCUSU);
 	plot_labels.push_back(EMDL_CTF_DEFOCUS_ANGLE);
@@ -514,8 +527,7 @@ void CtffindRunner::joinCtffindResults()
 
 	if (verb > 0 )
 	{
-		progress_bar(fn_micrographs_all.size());
-		std::cout << " Done! Written out: " << fn_out <<  "micrographs_ctf.star and " << fn_out << "logfile.pdf" << std::endl;
+		std::cout << " Done! Written out: " << fn_out << "logfile.pdf" << std::endl;
 	}
 
 	if (do_use_gctf)

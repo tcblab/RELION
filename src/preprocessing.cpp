@@ -46,12 +46,15 @@ void Preprocessing::read(int argc, char **argv, int rank)
 {
 	parser.setCommandLine(argc, argv);
 	int gen_section = parser.addSection("General options");
-	fn_star_in = parser.getOption("--i", "The STAR file with all (selected) micrographs to extract particles from","");
+	fn_star_in = parser.getOption("--i", "The STAR file with all (selected) micrographs to extract particles from", "");
 	fn_coord_suffix = parser.getOption("--coord_suffix", "The suffix for the coordinate files, e.g. \"_picked.star\" or \".box\"","");
 	fn_coord_dir = parser.getOption("--coord_dir", "The directory where the coordinate files are (default is same as micrographs)", "ASINPUT");
+	fn_coord_list = parser.getOption("--coord_list", "Alternative to coord_suffix&dir: provide a 2-column STAR file with micrographs and coordinate files","");
 	fn_part_dir = parser.getOption("--part_dir", "Output directory for particle stacks", "Particles/");
 	fn_part_star = parser.getOption("--part_star", "Output STAR file with all particles metadata", "");
+	fn_pick_star = parser.getOption("--pick_star", "Output STAR file with 2 columns for micrographs and coordinate files", "");
 	fn_data = parser.getOption("--reextract_data_star", "A _data.star file from a refinement to re-extract, e.g. with different binning or re-centered (instead of --coord_suffix)", "");
+	write_float16  = parser.checkOption("--float16", "Write in half-precision 16 bit floating point numbers (MRC mode 12), instead of 32 bit (MRC mode 0).");
 	keep_ctf_from_micrographs  = parser.checkOption("--keep_ctfs_micrographs", "By default, CTFs from fn_data will be kept. Use this flag to keep CTFs from input micrographs STAR file");
 	do_reset_offsets = parser.checkOption("--reset_offsets", "reset the origin offsets from the input _data.star file to zero?");
 	do_recenter = parser.checkOption("--recenter", "Re-center particle according to rlnOriginX/Y in --reextract_data_star STAR file");
@@ -72,6 +75,7 @@ void Preprocessing::read(int argc, char **argv, int rank)
 	extract_bias_x  = textToInteger(parser.getOption("--extract_bias_x", "Bias in X-direction of picked particles (this value in pixels will be added to the coords)", "0"));
 	extract_bias_y  = textToInteger(parser.getOption("--extract_bias_y", "Bias in Y-direction of picked particles (this value in pixels will be added to the coords)", "0"));
 	only_extract_unfinished = parser.checkOption("--only_do_unfinished", "Extract only particles if the STAR file for that micrograph does not yet exist.");
+	extract_minimum_fom = textToFloat(parser.getOption("--minimum_pick_fom", "Minimum value for rlnAutopickFigureOfMerit for particle extraction","-999."));
 
 	int perpart_section = parser.addSection("Particle operations");
 	do_project_3d = parser.checkOption("--project3d", "Project sub-tomograms along Z to generate 2D particles");
@@ -121,8 +125,15 @@ void Preprocessing::initialise()
 	{
 		if (verb > 0)
 		{
-			if (fn_star_in=="" || (fn_coord_suffix=="" && fn_data == ""))
-				REPORT_ERROR("Preprocessing::initialise ERROR: please provide --i and either (--coord_suffix or --reextract_data_star) to extract particles");
+			if (fn_star_in=="")
+				REPORT_ERROR("Preprocessing::initialise ERROR: please provide --i with list of micrographs to extract particles from");
+
+			int c = 0;
+			if (fn_data != "") c++;
+			if (fn_coord_suffix != "") c++;
+			if (fn_coord_list != "") c++;
+			if (c != 1)
+				REPORT_ERROR("Preprocessing::initialise ERROR: please provide (only) one of these three options: --reextract_data_star, --coord_suffix & --coord_list ");
 
 			if (extract_size < 0)
 				REPORT_ERROR("Preprocessing::initialise ERROR: please provide the size of the box to extract particle using --extract_size ");
@@ -158,6 +169,7 @@ void Preprocessing::initialise()
 
 		mic_star_has_ctf = MDmics.containsLabel(EMDL_CTF_DEFOCUSU);
 
+		micname2coordname.clear();
 		if (fn_data != "")
 		{
 			if (verb > 0)
@@ -192,9 +204,37 @@ void Preprocessing::initialise()
 		else
 		{
 			data_star_has_ctf = false;
-			// Make sure the coordinate file directory names end with a '/'
-			if (fn_coord_dir != "ASINPUT" && fn_coord_dir[fn_coord_dir.length()-1] != '/')
-				fn_coord_dir+="/";
+
+			// Either get coordinate filenames from coord_list, or from the fn_coord_suffix
+			if (fn_coord_list != "")
+			{
+				MetaDataTable MDcoords;
+				MDcoords.read(fn_coord_list);
+				FOR_ALL_OBJECTS_IN_METADATA_TABLE(MDcoords)
+				{
+					FileName fn_mic, fn_coord;
+					MDcoords.getValue(EMDL_MICROGRAPH_NAME, fn_mic);
+					MDcoords.getValue(EMDL_MICROGRAPH_COORDINATES, fn_coord);
+					micname2coordname[fn_mic] = fn_coord;
+				}
+			}
+			else
+			{
+
+				// Make sure the coordinate file directory names end with a '/'
+				if (fn_coord_dir != "ASINPUT" && fn_coord_dir[fn_coord_dir.length()-1] != '/')
+					fn_coord_dir+="/";
+
+				FOR_ALL_OBJECTS_IN_METADATA_TABLE(MDmics)
+				{
+					FileName fn_mic, fn_pre, fn_jobnr, fn_post;
+					MDmics.getValue(EMDL_MICROGRAPH_NAME, fn_mic);
+					decomposePipelineFileName(fn_mic, fn_pre, fn_jobnr, fn_post);
+					FileName fn_coord = fn_coord_dir + fn_post.withoutExtension() + fn_coord_suffix;
+					micname2coordname[fn_mic] = fn_coord;
+				}
+
+			}
 
 			// Loop over all micrographs in the input STAR file and warn of coordinate file or micrograph file do not exist
 			if (verb > 0 && fn_data == "")
@@ -203,10 +243,10 @@ void Preprocessing::initialise()
 				FOR_ALL_OBJECTS_IN_METADATA_TABLE(MDmics)
 				{
 					MDmics.getValue(EMDL_MICROGRAPH_NAME, fn_mic);
-					FileName fn_coord = getCoordinateFileName(fn_mic);
-					if (!exists(fn_coord))
+					FileName fn_coord = micname2coordname[fn_mic]; // if fn_mic doesn't exist in the std::map, the corresponding fn_coord becomes ""
+					if (fn_coord != "" && !exists(fn_coord) && verb > 0)
 						std::cerr << "Warning: coordinate file " << fn_coord << " does not exist..." << std::endl;
-					if (!exists(fn_mic))
+					if (!exists(fn_mic) && verb > 0)
 						std::cerr << "Warning: micrograph file " << fn_mic << " does not exist..." << std::endl;
 				}
 			}
@@ -277,10 +317,10 @@ void Preprocessing::joinAllStarFiles()
 {
 	FileName fn_ostar;
 	int og;
-	std::cout << " Joining metadata of all particles from " << MDmics.numberOfObjects() << " micrographs in one STAR file..." << std::endl;
+	std::cout <<std::endl << " Joining metadata of all particles from " << MDmics.numberOfObjects() << " micrographs in one STAR file..." << std::endl;
 
 	long int imic = 0, ibatch = 0;
-	MetaDataTable MDout, MDmicnames, MDbatch;
+	MetaDataTable MDout, MDmicnames, MDbatch, MDpick;
 	for (long int current_object1 = MDmics.firstObject();
 	              current_object1 != MetaDataTable::NO_MORE_OBJECTS && current_object1 != MetaDataTable::NO_OBJECTS_STORED;
 	              current_object1 = MDmics.nextObject())
@@ -291,6 +331,13 @@ void Preprocessing::joinAllStarFiles()
 
 		// Get the filename of the STAR file for just this micrograph
 		FileName fn_star = getOutputFileNameRoot(fn_mic) + "_extract.star";
+
+		if (fn_pick_star != "" && exists(fn_star))
+		{
+			MDpick.addObject();
+			MDpick.setValue(EMDL_MICROGRAPH_NAME, fn_mic);
+			MDpick.setValue(EMDL_MICROGRAPH_COORDINATES, fn_star);
+		}
 
 		if (fn_part_star != "")
 		{
@@ -312,9 +359,17 @@ void Preprocessing::joinAllStarFiles()
 		imic++;
 	} // end loop over all micrographs
 
+	// Write out the pick.star file
+	if (fn_pick_star != "")
+	{
+		MDpick.setName("coordinate_files");
+		MDpick.write(fn_pick_star);
+	}
+
 	// Write out the joined star files
 	if (fn_part_star != "")
 	{
+
 		// Get pixel size in original micrograph from obsModelMic, as this may no longer be present in obsModelPart
 		std::map<std::string, RFLOAT> optics_group_mic_angpix;
 		if (fn_data != "")
@@ -455,7 +510,7 @@ void Preprocessing::runExtractParticles()
 		if (fn_dir != fn_olddir && !exists(fn_dir))
 		{
 			// Make a Particles directory
-			int res = system(("mkdir -p " + fn_dir).c_str());
+			mktree(fn_dir);
 			fn_olddir = fn_dir;
 		}
 
@@ -467,7 +522,9 @@ void Preprocessing::runExtractParticles()
 		TIMING_TOC(TIMING_TOP);
 
 		if(micIsUsed)
+		{
 			MDoutMics.addObject(MDmics.getObject(current_object));
+		}
 
 		imic++;
 	}
@@ -657,15 +714,33 @@ bool Preprocessing::extractParticlesFromFieldOfView(FileName fn_mic, long int im
 	}
 	else
 	{
-		FileName fn_coord = getCoordinateFileName(fn_mic);
+		FileName fn_coord = micname2coordname[fn_mic];
 		if (!exists(fn_coord))
-			return(false);
+			return false;
 		if (do_extract_helix)
 			readHelicalCoordinates(fn_mic, fn_coord, MDin);
 		else
 			readCoordinates(fn_coord, MDin);
 	}
 	TIMING_TOC(TIMING_READ_COORD);
+
+	// If an extract_minimum_fom was given, remove
+	if (fabs(extract_minimum_fom + 999.) > 1e-6)
+	{
+		if (!MDin.containsLabel(EMDL_PARTICLE_AUTOPICK_FOM) && MDin.numberOfObjects() > 0)
+			REPORT_ERROR("ERROR: cannot apply minimum threshold for FOM, as input coordinate file does not contain rlnAutopickFigureOfMerit label.");
+		MetaDataTable MDcopy;
+		FOR_ALL_OBJECTS_IN_METADATA_TABLE(MDin)
+		{
+			RFLOAT fom;
+			MDin.getValue(EMDL_PARTICLE_AUTOPICK_FOM, fom);
+			if (fom > extract_minimum_fom)
+			{
+				MDcopy.addObject(MDin.getObject(current_object));
+			}
+		}
+		MDin = MDcopy;
+	}
 
 	if (MDin.numberOfObjects() > 0)
 	{
@@ -1102,7 +1177,7 @@ void Preprocessing::performPerImageOperations(
 		// Write one mrc file for every subtomogram
 		FileName fn_img;
 		fn_img.compose(fn_output_img_root, image_nr + 1, "mrc");
-		Ipart.write(fn_img);
+		Ipart.write(fn_img, -1, false, WRITE_OVERWRITE, write_float16 ? Float16: Float);
 		TIMING_TOC(TIMING_PER_IMG_OP_WRITE);
 	}
 	else
@@ -1129,9 +1204,9 @@ void Preprocessing::performPerImageOperations(
 		// Write this particle to the stack on disc
 		// First particle: write stack in overwrite mode, from then on just append to it
 		if (image_nr == 0)
-			Ipart.write(fn_output_img_root+".mrcs", -1, (nr_of_images > 1), WRITE_OVERWRITE);
+			Ipart.write(fn_output_img_root+".mrcs", -1, (nr_of_images > 1), WRITE_OVERWRITE, write_float16 ? Float16: Float);
 		else
-			Ipart.write(fn_output_img_root+".mrcs", -1, false, WRITE_APPEND);
+			Ipart.write(fn_output_img_root+".mrcs", -1, false, WRITE_APPEND, write_float16 ? Float16: Float);
 		TIMING_TOC(TIMING_PER_IMG_OP_WRITE);
 	}
 }
@@ -1269,14 +1344,6 @@ MetaDataTable Preprocessing::getCoordinateMetaDataTable(FileName fn_mic)
 	return MDresult;
 }
 
-// Get the coordinate filename from the micrograph filename
-FileName Preprocessing::getCoordinateFileName(FileName fn_mic)
-{
-	FileName fn_pre, fn_jobnr, fn_post;
-	decomposePipelineFileName(fn_mic, fn_pre, fn_jobnr, fn_post);
-	FileName fn_coord = fn_coord_dir + fn_post.withoutExtension() + fn_coord_suffix;
-	return fn_coord;
-}
 
 // Get the coordinate filename from the micrograph filename
 FileName Preprocessing::getOutputFileNameRoot(FileName fn_mic)

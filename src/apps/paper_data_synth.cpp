@@ -1,7 +1,7 @@
 #include <vector>
 #include <src/strings.h>
 #include <src/filename.h>
-#include <src/jaz/distribution_helper.h>
+#include <src/jaz/single_particle/distribution_helper.h>
 #include <src/jaz/gravis/t2Vector.h>
 
 using namespace gravis;

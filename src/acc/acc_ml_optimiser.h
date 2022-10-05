@@ -75,7 +75,7 @@ public:
 	void fineIndexToFineIndices(SamplingParameters sp) // converts an "ihidden_over" (finely sampled) index to partial indices (and coarse index)
 	{
 		int oversamples = sp.nr_oversampled_rot*sp.nr_oversampled_trans;
-		int t_idx = fineIdx;
+		size_t t_idx = fineIdx;
 		iclass = floor( t_idx / ( sp.nr_dir * sp.nr_psi * sp.nr_trans * oversamples ));
 		t_idx   -= iclass     * ( sp.nr_dir * sp.nr_psi * sp.nr_trans * oversamples );
 		idir   = floor( t_idx / ( sp.nr_psi * sp.nr_trans * oversamples ));
@@ -137,13 +137,14 @@ public:
 	unsigned long part_id;
 
 	std::vector<MultidimArray<Complex > > Fimg, Fimg_nomask, local_Fimgs_shifted, local_Fimgs_shifted_nomask;
-	std::vector<MultidimArray<RFLOAT> > Fctf, local_Fctf, local_Minvsigma2;
+	std::vector<MultidimArray<RFLOAT> > Fctf, local_Fctf, local_Minvsigma2, FstMulti;
 	std::vector<int> pointer_dir_nonzeroprior, pointer_psi_nonzeroprior;
 	std::vector<RFLOAT> directions_prior, psi_prior, local_sqrtXi2;
 	std::vector<RFLOAT> highres_Xi2_img, min_diff2;
 	MultidimArray<bool> Mcoarse_significant;
 	// And from storeWeightedSums
 	std::vector<RFLOAT> sum_weight, significant_weight, max_weight;
+	std::vector< std::vector<RFLOAT> > sum_weight_class;
 	std::vector<Matrix1D<RFLOAT> > old_offset, prior;
 	std::vector<MultidimArray<RFLOAT> > power_img;
 	MultidimArray<XFLOAT> Mweight;
@@ -161,6 +162,7 @@ public:
 		old_offset.resize(nr_images);
 		prior.resize(nr_images);
 		max_index.resize(nr_images);
+		sum_weight_class.resize(nr_images);
 	};
 };
 

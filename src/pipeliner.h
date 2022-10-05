@@ -37,16 +37,18 @@ public:
 
 	std::string name;
 	std::string alias;
-	int type;
+    int type;
+	std::string typeLabel;
 	int status;
 	std::vector<long int> inputNodeList;  // List of Nodes of input to this process
 	std::vector<long int> outputNodeList; // List of Nodes of output from this process
 
 	// Constructor
-	Process(std::string _name, int _type, int _status, std::string _alias="None")
+	Process(std::string _name, std::string _typeLabel, int _type, int _status, std::string _alias="None")
 	{
 		name = _name;
-		type = _type;
+        type = _type;
+		typeLabel = _typeLabel;
 		status = _status;
 		alias = _alias;
 	}
@@ -58,12 +60,17 @@ public:
 		outputNodeList.clear();
 	}
 
+	long int getJobNumber()
+	{
+		FileName mynumstr = name;
+		return textToInteger(mynumstr.afterFirstOf("/job"));
+	}
+
 };
 
 #define DO_LOCK true
 #define DONT_LOCK false
 // Forward definition
-class PipeLineFlowChart;
 
 
 #define PIPELINE_HAS_CHANGED ".pipeline_has_changed"
@@ -119,12 +126,15 @@ public:
 	long int addNode(Node &_Node, bool touch_if_not_exist = false);
 
 	// Add a new Process to the list (no checks are performed)
-	long int addNewProcess(Process &_Process, bool do_overwrite = false);
+	long int addNewProcess(Process &_Process);
 
 	// Find nodes or process (by name or alias)
 	long int findNodeByName(std::string name);
 	long int findProcessByName(std::string name);
 	long int findProcessByAlias(std::string name);
+
+	// Check whether any outputnode from this process is used as input for any other process
+	bool checkDependency(long int process);
 
 	// Touch each individual Node name in the temporary Nodes directory
 	// Return true if Node output file exists and temporary file is written, false otherwise
@@ -135,6 +145,9 @@ public:
 	void deleteTemporaryNodeFile(Node &node);
 	void deleteTemporaryNodeFiles(Process &process);
 
+	// Decrease job counter by one for overwriting jobs
+	void setJobCounter(long int value);
+
 	// Re-make entries of all NodeNames in the hidden .Nodes directory (for file browsing for InputNode I/O)
 	void remakeNodeDirectory();
 
@@ -142,32 +155,46 @@ public:
 	// Returns true if any of the running processes has completed, false otherwise
 	bool checkProcessCompletion();
 
+
 	// Get the command line arguments for thisjob
-	bool getCommandLineJob(RelionJob &thisjob, int current_job, bool is_main_continue,
-			bool is_scheduled, bool do_makedir, bool do_overwrite_current,
+	bool getCommandLineJob(RelionJob &thisjob, int current_job, bool is_main_continue, bool is_scheduled, bool do_makedir,
 			std::vector<std::string> &commands, std::string &final_command, std::string &error_message);
 
 	// Adds _job to the pipeline and return the id of the newprocess
-	long int addJob(RelionJob &_job, int as_status, bool do_overwrite, bool do_write_minipipeline = true);
+	long int addJob(RelionJob &_job, int as_status, bool do_write_minipipeline = true);
+
+	// Runs a job and adds it to the pipeline with ccpem-pipeliner
+	bool runJobCpipe(RelionJob &_job, int &current_job, bool only_schedule, bool is_main_continue,
+			bool is_scheduled, std::string &error_message);
+
+	// ADDED FOR CCPEM PIPELINER - makes the job.star files to run a job
+	bool makeJobFilesCpipe(RelionJob &_job, int &current_job, bool only_schedule, bool is_main_continue,
+			bool is_scheduled, std::string &error_message);
+
+	//ADDED FOR CCPEM PIPELINER - prints the command
+	bool PrintComCpipe(RelionJob &thisjob, int current_job, bool is_main_continue,
+			bool is_scheduled, bool do_makedir, std::vector<std::string> &commands,
+			std::string &final_command, std::string &error_message);
+
 
 	// Runs a job and adds it to the pipeline
 	bool runJob(RelionJob &_job, int &current_job, bool only_schedule, bool is_main_continue,
-			bool is_scheduled, bool do_overwrite_current, std::string &error_message);
+			bool is_scheduled, std::string &error_message, bool write_hidden_guifile = true);
 
 	// Adds a scheduled job to the pipeline from the command line (with a name for job type)
-	int addScheduledJob(std::string job_type, std::string fn_options);
+	int addScheduledJob(std::string job_type, std::string fn_options, bool write_hidden_guifile = true);
 
 	// Adds a scheduled job to the pipeline from the command line (with integer job type)
-	int addScheduledJob(int job_type, std::string fn_options);
+	int addScheduledJob(int job_type, std::string fn_options, bool write_hidden_guifile = true);
 
 	// Add this RelionJob as scheduled to the pipeline
-	int addScheduledJob(RelionJob &job, std::string fn_options="");
+	int addScheduledJob(RelionJob &job, std::string fn_options="", bool write_hidden_guifile = true);
 
 	void waitForJobToFinish(int current_job, bool &is_failure, bool &is_abort);
 
 	// Runs a series of scheduled jobs, possibly in a loop, from the command line
 	void runScheduledJobs(FileName fn_sched, FileName fn_jobids, int nr_repeat,
-			long int minutes_wait, long int minutes_wait_before = 0, long int seconds_wait_after = 10, bool do_overwrite_current = false);
+			long int minutes_wait, long int minutes_wait_before = 0, long int seconds_wait_after = 10);
 
 	// If I'm deleting this_job from the pipeline, which Nodes and which Processes need to be deleted?
 	void deleteJobGetNodesAndProcesses(int this_job, bool do_recursive, std::vector<bool> &deleteNodes, std::vector<bool> &deleteProcesses);
@@ -183,9 +210,6 @@ public:
 
 	// Set the alias for a job, return true for success, false otherwise
 	bool setAliasJob(int this_job, std::string alias, std::string &error_message);
-
-	// Make the flowchart for this job
-	bool makeFlowChart(long int current_job, bool do_display_pdf, std::string &error_message);
 
 	// Undelete a JOb from the pipeline
 	void undeleteJob(FileName fn_undel);
@@ -214,54 +238,6 @@ public:
 
 	// Read in the pipeline from a STAR file
 	void read(bool do_lock = false, std::string lock_message = "Undefined lock message");
-};
-
-class PipeLineFlowChart
-{
-public:
-
-	// Use short process names, or original, full ones
-	bool do_short_names;
-
-	// Also make upwardsFlowCharts for all branches?
-	bool do_branches;
-
-	// All the processes for which a upwardFlowChart will be made
-	std::vector<long int> todo_list;
-
-public:
-
-	PipeLineFlowChart()
-	{
-		do_branches= true;
-		do_short_names = false;
-	}
-
-	// Write how many particles or classes or whatever the node is that represents a downward arrow
-	std::string getDownwardsArrowLabel(PipeLine &pipeline, long int lower_process, long int new_process);
-
-	// The process will be added to the top
-	// The function returns the parent process from which the upper_node came
-	// It will return a negative value if there was no parent process
-	long int addProcessToUpwardsFlowChart(std::ofstream &fh, PipeLine &pipeline, long int lower_process,
-			long int new_process, std::vector<long int> &branched_procs);
-
-	void makeOneUpwardsFlowChart(std::ofstream &fh, PipeLine &pipeline, long int from_node,
-			std::vector<long int> &all_branches, bool is_main_flow);
-
-	void makeAllUpwardsFlowCharts(FileName &fn_out, PipeLine &pipeline, long int from_process);
-
-	// Open and close a new flowchart picture
-	void openTikZPicture(std::ofstream &fh, bool is_main_flow);
-
-	void closeTikZPicture(std::ofstream &fh, bool is_main_flow);
-
-	void adaptNamesForTikZ(FileName &name);
-
-	// Open and close a new output file
-	void openFlowChartFile(FileName &fn_out, std::ofstream &fh);
-
-	void closeFlowChartFile(std::ofstream &fh);
 };
 
 #endif /* PIPELINER_H_ */

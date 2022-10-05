@@ -20,14 +20,14 @@
 #ifndef __GRAVIS__TIMAGE_NORMALIZATION__
 #define __GRAVIS__TIMAGE_NORMALIZATION__
 
-#include <gravis/tImage.h>
-#include <gravis/tImage/traits.h>
-#include <gravis/tRGB.h>
-#include <gravis/tRGBA.h>
-#include <gravis/tRGB_A.h>
-#include <gravis/t2Vector.h>
-#include <gravis/t3Vector.h>
-#include <gravis/t4Vector.h>
+#include <src/jaz/gravis/tImage.h>
+#include <src/jaz/gravis/tImage/traits.h>
+#include <src/jaz/gravis/tRGB.h>
+#include <src/jaz/gravis/tRGBA.h>
+#include <src/jaz/gravis/tRGB_A.h>
+#include <src/jaz/gravis/t2Vector.h>
+#include <src/jaz/gravis/t3Vector.h>
+#include <src/jaz/gravis/t4Vector.h>
 
 namespace gravis
 {

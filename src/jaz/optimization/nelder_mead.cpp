@@ -19,200 +19,192 @@
  ***************************************************************************/
 
 #include "nelder_mead.h"
-#include <src/jaz/index_sort.h>
+#include <src/jaz/util/index_sort.h>
 #include <iostream>
 #include <cmath>
 
 std::vector<double> NelderMead::optimize(
-        const std::vector<double>& initial,
-        const Optimization& opt,
-        double initialStep, double tolerance, long maxIters,
-        double alpha, double gamma, double rho, double sigma,
-        bool verbose, double* minCost)
+		const std::vector<double>& initial,
+		const Optimization& opt,
+		double initialStep, double tolerance, long maxIters,
+		double alpha, double gamma, double rho, double sigma,
+		bool verbose, double* minCost)
 {
-    const double n = initial.size();
-    const double m = initial.size() + 1;
+	const double n = initial.size();
+	const double m = initial.size() + 1;
 
-    std::vector<std::vector<double> > simplex(m);
+	std::vector<std::vector<double> > simplex(m);
 
-    simplex[0] = initial;
+	simplex[0] = initial;
 
-    for (int j = 1; j < m; j++)
-    {
-        simplex[j] = initial;
-        simplex[j][j-1] += initialStep;
-    }
+	for (int j = 1; j < m; j++)
+	{
+		simplex[j] = initial;
+		simplex[j][j-1] += initialStep;
+	}
 
-    // avoid runtime allocations (std::vectors live on the heap)
-    std::vector<std::vector<double> > nextSimplex(m);
-    std::vector<double> values(m), nextValues(m), centroid(n),
-            reflected(n), expanded(n), contracted(n);
+	// avoid runtime allocations (std::vectors live on the heap)
+	std::vector<std::vector<double> > nextSimplex(m);
+	std::vector<double> values(m), nextValues(m), centroid(n),
+			reflected(n), expanded(n), contracted(n);
 
-    void* tempStorage = opt.allocateTempStorage();
+	void* tempStorage = opt.allocateTempStorage();
 
-    // compute values
-    for (int j = 0; j < m; j++)
-    {
-        values[j] = opt.f(simplex[j], tempStorage);
-    }
+	// compute values
+	for (int j = 0; j < m; j++)
+	{
+		values[j] = opt.f(simplex[j], tempStorage);
+	}
 
-    if (verbose)
-    {
-        std::cout << "f0 = " << values[0] << std::endl;
-    }
+	for (long i = 0; i < maxIters; i++)
+	{
+		// sort x and f(x) by ascending f(x)
+		std::vector<int> order = IndexSort<double>::sortIndices(values);
 
-    for (long i = 0; i < maxIters; i++)
-    {
-        // sort x and f(x) by ascending f(x)
-        std::vector<int> order = IndexSort<double>::sortIndices(values);
+		if (verbose)
+		{
+			opt.report(i, values[order[0]], simplex[order[0]]);
+		}
 
-        opt.report(i, values[order[0]], simplex[order[0]]);
+		for (int j = 0; j < m; j++)
+		{
+			nextSimplex[j] = simplex[order[j]];
+			nextValues[j] = values[order[j]];
+		}
 
-        if (verbose)
-        {
-            std::cout << i << ": " << values[order[0]] << std::endl;
-        }
+		simplex = nextSimplex;
+		values = nextValues;
 
-        for (int j = 0; j < m; j++)
-        {
-            nextSimplex[j] = simplex[order[j]];
-            nextValues[j] = values[order[j]];
-        }
+		// compute centroid
+		for (int k = 0; k < n; k++)
+		{
+			centroid[k] = 0.0;
+		}
+		for (int j = 0; j < n; j++) // leave out the worst x
+		{
+			for (int k = 0; k < n; k++)
+			{
+				centroid[k] += simplex[j][k];
+			}
+		}
+		for (int k = 0; k < n; k++)
+		{
+			centroid[k] /= n;
+		}
 
-        simplex = nextSimplex;
-        values = nextValues;
+		// check for convergence
+		bool allInside = true;
+		for (int j = 0; j < m; j++)
+		{
+			double dx = 0.0;
 
-        // compute centroid
-        for (int k = 0; k < n; k++)
-        {
-            centroid[k] = 0.0;
-        }
-        for (int j = 0; j < n; j++) // leave out the worst x
-        {
-            for (int k = 0; k < n; k++)
-            {
-                centroid[k] += simplex[j][k];
-            }
-        }
-        for (int k = 0; k < n; k++)
-        {
-            centroid[k] /= n;
-        }
+			for (int k = 0; k < n; k++)
+			{
+				double ddx = simplex[j][k] - centroid[k];
+				dx += ddx * ddx;
+			}
 
-        // check for convergence
-        bool allInside = true;
-        for (int j = 0; j < m; j++)
-        {
-            double dx = 0.0;
+			if (sqrt(dx) > tolerance)
+			{
+				allInside = false;
+				break;
+			}
+		}
+		if (allInside)
+		{
+			if (verbose) std::cout << std::endl;
+			return simplex[0];
+		}
 
-            for (int k = 0; k < n; k++)
-            {
-                double ddx = simplex[j][k] - centroid[k];
-                dx += ddx * ddx;
-            }
+		// reflect
+		for (int k = 0; k < n; k++)
+		{
+			reflected[k] = (1.0 + alpha) * centroid[k] - alpha * simplex[n][k];
+		}
 
-            if (sqrt(dx) > tolerance)
-            {
-                allInside = false;
-                break;
-            }
-        }
-        if (allInside)
-        {
-            if (verbose) std::cout << "Exiting because allInside" << std::endl;
+		double vRefl = opt.f(reflected, tempStorage);
 
-            opt.deallocateTempStorage(tempStorage);
-            return simplex[0];
-        }
+		if (vRefl < values[n-1] && vRefl > values[0])
+		{
+			simplex[n] = reflected;
+			values[n] = vRefl;
+			continue;
+		}
 
-        // reflect
-        for (int k = 0; k < n; k++)
-        {
-            reflected[k] = (1.0 + alpha) * centroid[k] - alpha * simplex[n][k];
-        }
+		// expand
+		if (vRefl < values[0])
+		{
+			for (int k = 0; k < n; k++)
+			{
+				expanded[k] = (1.0 - gamma) * centroid[k] + gamma * reflected[k];
+			}
 
-        double vRefl = opt.f(reflected, tempStorage);
+			double vExp = opt.f(expanded, tempStorage);
 
-        if (vRefl < values[n-1] && vRefl > values[0])
-        {
-            simplex[n] = reflected;
-            values[n] = vRefl;
-            continue;
-        }
+			if (vExp < vRefl)
+			{
+				simplex[n] = expanded;
+				values[n] = vExp;
+			}
+			else
+			{
+				simplex[n] = reflected;
+				values[n] = vRefl;
+			}
 
-        // expand
-        if (vRefl < values[0])
-        {
-            for (int k = 0; k < n; k++)
-            {
-                expanded[k] = (1.0 - gamma) * centroid[k] + gamma * reflected[k];
-            }
+			continue;
+		}
 
-            double vExp = opt.f(expanded, tempStorage);
+		// contract
+		for (int k = 0; k < n; k++)
+		{
+			contracted[k] = (1.0 - rho) * centroid[k] + rho * simplex[n][k];
+		}
 
-            if (vExp < vRefl)
-            {
-                simplex[n] = expanded;
-                values[n] = vExp;
-            }
-            else
-            {
-                simplex[n] = reflected;
-                values[n] = vRefl;
-            }
+		double vContr = opt.f(contracted, tempStorage);
 
-            continue;
-        }
+		if (vContr < values[n])
+		{
+			simplex[n] = contracted;
+			values[n] = vContr;
 
-        // contract
-        for (int k = 0; k < n; k++)
-        {
-            contracted[k] = (1.0 - rho) * centroid[k] + rho * simplex[n][k];
-        }
+			continue;
+		}
 
-        double vContr = opt.f(contracted, tempStorage);
+		// shrink
+		for (int j = 1; j < m; j++)
+		{
+			for (int k = 0; k < n; k++)
+			{
+				simplex[j][k] = (1.0 - sigma) * simplex[0][k] + sigma * simplex[j][k];
+			}
 
-        if (vContr < values[n])
-        {
-            simplex[n] = contracted;
-            values[n] = vContr;
+			values[j] = opt.f(simplex[j], tempStorage);
+		}
+	}
 
-            continue;
-        }
+	if (verbose) std::cout << std::endl;
 
-        // shrink
-        for (int j = 1; j < m; j++)
-        {
-            for (int k = 0; k < n; k++)
-            {
-                simplex[j][k] = (1.0 - sigma) * simplex[0][k] + sigma * simplex[j][k];
-            }
+	opt.deallocateTempStorage(tempStorage);
 
-            values[j] = opt.f(simplex[j], tempStorage);
-        }
-    }
+	std::vector<int> order = IndexSort<double>::sortIndices(values);
 
-    if (verbose) std::cout << "Exiting after reaching maxIter" << std::endl;
-    opt.deallocateTempStorage(tempStorage);
+	if (minCost)
+	{
+		*minCost = values[order[0]];
+	}
 
-    std::vector<int> order = IndexSort<double>::sortIndices(values);
-
-    if (minCost)
-    {
-        *minCost = values[order[0]];
-    }
-
-    return simplex[order[0]];
+	return simplex[order[0]];
 }
 
 void NelderMead::test()
 {
-    RosenbrockBanana rb;
-    std::vector<double> initial(2);
-    initial[0] = 3.0;
-    initial[0] = 1.0;
+	RosenbrockBanana rb;
+	std::vector<double> initial(2);
+	initial[0] = 3.0;
+	initial[0] = 1.0;
 
-    std::vector<double> x0 = optimize(initial, rb, 0.5, 0.001, 1000);
+	std::vector<double> x0 = optimize(initial, rb, 0.5, 0.001, 1000);
 
-    std::cout << "should be close to 1, 1: " << x0[0] << ", " << x0[1] << "\n";
+	std::cout << "should be close to 1, 1: " << x0[0] << ", " << x0[1] << "\n";
 }

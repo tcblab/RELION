@@ -7,20 +7,21 @@
 
 #ifndef AUTOPICKER_H_
 #define AUTOPICKER_H_
+#include <stdlib.h>
 #include "src/image.h"
 #include "src/multidim_array.h"
 #include "src/metadata_table.h"
 #include "src/projector.h"
 #include "src/healpix_sampling.h"
 #include "src/projector.h"
-#include "src/jaz/obs_model.h"
+#include <src/jaz/single_particle/obs_model.h>
 #include "src/ctf.h"
 #include "src/fftw.h"
 #include "src/time.h"
 #include "src/mask.h"
 #include "src/macros.h"
 #include "src/helix.h"
-#ifdef CUDA
+#ifdef _CUDA_ENABLED
 #include "src/acc/cuda/cuda_mem_utils.h"
 #include "src/acc/acc_projector.h"
 #include "src/acc/cuda/cuda_settings.h"
@@ -171,6 +172,55 @@ public:
 	// Vector with all diameters to be sampled
 	std::vector<RFLOAT> diams_LoG;
 
+	/// Topaz wrappers
+	// Use topaz train or topaz extract instead of template-based picking
+	bool do_topaz_train, do_topaz_extract;
+
+	// Topaz threshold for picking
+	RFLOAT topaz_threshold;
+
+	// Write out intermediate plots for topaz helical picking
+	bool do_topaz_plot;
+
+	// Expected number of particles per micrograph
+	int topaz_nr_particles;
+
+	// Topaz downscale factor
+	int topaz_downscale;
+
+	// Number of topaz workers for training
+	int topaz_workers;
+
+	// Topaz command executable
+	FileName fn_topaz_exe;
+
+	// sh executable
+	FileName fn_shell;
+
+	// Topaz saved model for use in extract
+	FileName topaz_model;
+
+	// Topaz particle radius for use in extract
+	int topaz_radius;
+
+	// GPU Device ID
+	int device_id = -1;
+
+	// Filename for picks or particles star file to be used for topaz training
+	FileName topaz_train_picks, topaz_train_parts;
+
+	// Metadata table for training picks
+	MetaDataTable MDtrain;
+
+	// Default ratio of picks in the test validation set
+	RFLOAT topaz_test_ratio;
+
+	// Number of topaz workers
+	int nr_topaz_threads;
+
+	// Other arguments to be passed to topaz
+	FileName topaz_additional_args;
+
 	//// Specific amyloid picker
 	bool do_amyloid;
 
@@ -287,10 +337,10 @@ public:
 	void usage();
 
 	// Initialise some general stuff after reading
-	void initialise();
+	void initialise(int rank = 0);
 
 	// Set device-affinity
-	int deviceInitialise();
+	void deviceInitialise();
 
 	// General function to decide what to do
 	void run();
@@ -353,6 +403,12 @@ public:
 			RFLOAT tube_length_min_pix,
 			int skip_side, float scale);
 
+	MetaDataTable getMDtrainFromParticleStar(MetaDataTable &MDparts, ObservationModel &obsModel);
+	MetaDataTable readTopazCoordinates(FileName fn_coord, int _topaz_downscale = 1);
+
+	void preprocessMicrographTopaz(FileName fn_in, FileName fn_out, int downscale);
+	void trainTopaz();
+	void autoPickTopazOneMicrograph(FileName &fn_mic, int rank = 0);
 	void autoPickLoGOneMicrograph(FileName &fn_mic, long int imic);
 	void autoPickOneMicrograph(FileName &fn_mic, long int imic);
 

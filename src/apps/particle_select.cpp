@@ -1,4 +1,4 @@
-#include <src/jaz/stack_helper.h>
+#include <src/jaz/single_particle/stack_helper.h>
 #include <src/jaz/gravis/t2Vector.h>
 #include <src/metadata_table.h>
 

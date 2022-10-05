@@ -21,83 +21,284 @@
 #include "lbfgs.h"
 #include <src/error.h>
 
-static pthread_mutex_t lib_lbfgs_mutex = PTHREAD_MUTEX_INITIALIZER;
+std::vector<double> LBFGS::optimize(
+		const std::vector<double> &initial,
+		const DifferentiableOptimization &opt,
+		int verbosity, int max_iters,
+		double epsilon, double xtol)
+{
+	const int N = initial.size();
+
+	lbfgsfloatval_t fx;
+	lbfgsfloatval_t* m_x = lbfgs_malloc(N);
+
+	if (m_x == NULL)
+	{
+		REPORT_ERROR("LBFGS::optimize: Failed to allocate a memory block for variables.\n");
+	}
+
+	for (int i = 0; i < N; i++)
+	{
+		m_x[i] = initial[i];
+	}
+
+	void* tempStorage = opt.allocateTempStorage();
+
+	LibLbfgsAdapter adapter(opt, tempStorage, N, verbosity > 0);
+
+	int ret(LBFGSERR_UNKNOWNERROR);
+
+	lbfgs_parameter_t param;
+
+	lbfgs_parameter_init(&param);
+
+	param.max_iterations = max_iters;
+	param.epsilon = epsilon;
+	param.xtol = xtol;
+
+	#pragma omp critical(LBGFS)
+	{
+		ret = lbfgs(N, m_x, &fx, evaluate, progress, &adapter, &param);
+	}
+
+	if (verbosity > 1)
+	{
+		std::cout << "\n\nL-BFGS optimization terminated with status code " << ret << ": ";
+		std::cout << decodeStatus(ret) << "\n";
+		std::cout << "  fx = " << fx << std::endl;
+	}
+
+	std::vector<double> out(N);
+
+	for (int i = 0; i < N; i++)
+	{
+		out[i] = m_x[i];
+	}
+
+	lbfgs_free(m_x);
+
+	opt.deallocateTempStorage(tempStorage);
+
+	return out;
+}
 
 std::vector<double> LBFGS::optimize(
-    const std::vector<double> &initial,
-    const DifferentiableOptimization &opt,
-    bool verbose, int max_iters, double epsilon)
+		const std::vector<double> &initial,
+		const FastDifferentiableOptimization &opt,
+		int verbosity, int max_iters,
+		double epsilon, double xtol)
 {
-    const int N = initial.size();
+	const int N = initial.size();
 
-    lbfgsfloatval_t fx;
-    lbfgsfloatval_t* m_x = lbfgs_malloc(N);
+	lbfgsfloatval_t fx;
+	lbfgsfloatval_t* m_x = lbfgs_malloc(N);
 
-    if (m_x == NULL)
-    {
-        REPORT_ERROR("LBFGS::optimize: Failed to allocate a memory block for variables.\n");
-    }
+	if (m_x == NULL)
+	{
+		REPORT_ERROR("LBFGS::optimize: Failed to allocate a memory block for variables.\n");
+	}
 
-    for (int i = 0; i < N; i++)
-    {
-        m_x[i] = initial[i];
-    }
+	for (int i = 0; i < N; i++)
+	{
+		m_x[i] = initial[i];
+	}
 
-    void* tempStorage = opt.allocateTempStorage();
+	FastLibLbfgsAdapter adapter(opt, N, verbosity > 0);
 
-    LibLbfgsAdapter adapter(opt, tempStorage, N, verbose);
+	int ret(LBFGSERR_UNKNOWNERROR);
 
-    int ret;
+	lbfgs_parameter_t param;
 
-    lbfgs_parameter_t param;
+	lbfgs_parameter_init(&param);
 
-    lbfgs_parameter_init(&param);
-
-    param.max_iterations = max_iters;
+	param.max_iterations = max_iters;
 	param.epsilon = epsilon;
-	
-    pthread_mutex_lock(&lib_lbfgs_mutex);
-    {
-        ret = lbfgs(N, m_x, &fx, evaluate, progress, &adapter, &param);
-    }
-    pthread_mutex_unlock(&lib_lbfgs_mutex);
+	param.xtol = xtol;
 
-    if (verbose)
-    {
-        std::cout << "L-BFGS optimization terminated with status code = " << translateError(ret) << "\n";
-		std::cout << "  fx = " << fx << "\n";
-		
-    }
+	//#pragma omp critical(LBGFS)
+	{
+		ret = lbfgs(N, m_x, &fx, evaluate_fast, progress_fast, &adapter, &param);
+	}
 
-    std::vector<double> out(N);
+	if (verbosity > 1)
+	{
+		std::cout << "\n\nL-BFGS optimization terminated with status code " << ret << ": ";
+		std::cout << decodeStatus(ret) << "\n";
+		std::cout << "  fx = " << fx << std::endl;
+	}
 
-    for (int i = 0; i < N; i++)
-    {
-        out[i] = m_x[i];
-    }
+	std::vector<double> out(N);
 
-    lbfgs_free(m_x);
+	for (int i = 0; i < N; i++)
+	{
+		out[i] = m_x[i];
+	}
 
-    opt.deallocateTempStorage(tempStorage);
+	lbfgs_free(m_x);
 
-    return out;
+	return out;
 }
 
 void LBFGS::test()
 {
-    RosenbrockBanana rb;
-    std::vector<double> initial(2);
-    initial[0] = 3.0;
-    initial[0] = 1.0;
+	RosenbrockBanana rb;
+	std::vector<double> initial(2);
+	initial[0] = 3.0;
+	initial[0] = 1.0;
 
-    std::vector<double> x0 = optimize(initial, rb, false);
+	std::vector<double> x0 = optimize(initial, rb, false);
 
 	std::cout << "should be close to 1, 1: " << x0[0] << ", " << x0[1] << "\n";
 }
 
-std::string LBFGS::translateError(int ret)
+lbfgsfloatval_t LBFGS::evaluate(
+		void *instance, const lbfgsfloatval_t *x, lbfgsfloatval_t *g,
+		const int n, const lbfgsfloatval_t step)
 {
-	switch (ret)
+	LibLbfgsAdapter* adapter = (LibLbfgsAdapter*) instance;
+
+	return adapter->evaluate(x, g, n, step);
+}
+
+lbfgsfloatval_t LBFGS::evaluate_fast(
+		void *instance, const lbfgsfloatval_t *x, lbfgsfloatval_t *g,
+		const int n, const lbfgsfloatval_t step)
+{
+	FastLibLbfgsAdapter* adapter = (FastLibLbfgsAdapter*) instance;
+
+	return adapter->evaluate(x, g, n, step);
+}
+
+int LBFGS::progress(
+		void *instance, const lbfgsfloatval_t *x, const lbfgsfloatval_t *g,
+		const lbfgsfloatval_t fx, const lbfgsfloatval_t xnorm, const lbfgsfloatval_t gnorm,
+		const lbfgsfloatval_t step, int n, int k, int ls)
+{
+	LibLbfgsAdapter* adapter = (LibLbfgsAdapter*) instance;
+
+	return adapter->progress(x, g, fx, xnorm, gnorm, step, n, k, ls);
+}
+
+int LBFGS::progress_fast(
+		void *instance, const lbfgsfloatval_t *x, const lbfgsfloatval_t *g,
+		const lbfgsfloatval_t fx, const lbfgsfloatval_t xnorm, const lbfgsfloatval_t gnorm,
+		const lbfgsfloatval_t step, int n, int k, int ls)
+{
+	FastLibLbfgsAdapter* adapter = (FastLibLbfgsAdapter*) instance;
+
+	return adapter->progress(x, g, fx, xnorm, gnorm, step, n, k, ls);
+}
+
+// ------------------------------ //
+
+LBFGS::LibLbfgsAdapter::LibLbfgsAdapter(
+		const DifferentiableOptimization &opt,
+		void *tempStorage, int n, bool verbose)
+	:   opt(opt),
+	  n(n),
+	  verbose(verbose),
+	  x_vec(n),
+	  grad_vec(n),
+	  tempStorage(tempStorage)
+{    
+}
+
+lbfgsfloatval_t LBFGS::LibLbfgsAdapter::evaluate(
+		const lbfgsfloatval_t *x, lbfgsfloatval_t *g,
+		const int n, const lbfgsfloatval_t step)
+{
+	for (int i = 0; i < n; i++)
+	{
+		x_vec[i] = x[i];
+	}
+
+	double fx = opt.f(x_vec, tempStorage);
+
+	opt.grad(x_vec, grad_vec, tempStorage);
+
+	for (int i = 0; i < n; i++)
+	{
+		g[i] = grad_vec[i];
+	}
+
+	return fx;
+}
+
+int LBFGS::LibLbfgsAdapter::progress(
+		const lbfgsfloatval_t *x, const lbfgsfloatval_t *g,
+		const lbfgsfloatval_t fx, const lbfgsfloatval_t xnorm,
+		const lbfgsfloatval_t gnorm, const lbfgsfloatval_t step,
+		int n, int k, int ls)
+{
+	if (verbose)
+	{
+		for (int i = 0; i < n; i++)
+		{
+			x_vec[i] = x[i];
+		}
+		
+		opt.report(k, fx, x_vec);
+	}
+	
+	return 0;
+}
+
+// ------------------------------ //
+
+LBFGS::FastLibLbfgsAdapter::FastLibLbfgsAdapter(
+		const FastDifferentiableOptimization &opt,
+		int n, bool verbose)
+	:   opt(opt),
+	  n(n),
+	  verbose(verbose),
+	  x_vec(n),
+	  grad_vec(n)
+{
+}
+
+lbfgsfloatval_t LBFGS::FastLibLbfgsAdapter::evaluate(
+		const lbfgsfloatval_t *x, lbfgsfloatval_t *g,
+		const int n, const lbfgsfloatval_t step)
+{
+	for (int i = 0; i < n; i++)
+	{
+		x_vec[i] = x[i];
+	}
+
+	double fx = opt.gradAndValue(x_vec, grad_vec);
+
+	for (int i = 0; i < n; i++)
+	{
+		g[i] = grad_vec[i];
+	}
+
+	return fx;
+}
+
+int LBFGS::FastLibLbfgsAdapter::progress(
+		const lbfgsfloatval_t *x, const lbfgsfloatval_t *g,
+		const lbfgsfloatval_t fx, const lbfgsfloatval_t xnorm,
+		const lbfgsfloatval_t gnorm, const lbfgsfloatval_t step,
+		int n, int k, int ls)
+{
+	if (verbose)
+	{
+		for (int i = 0; i < n; i++)
+		{
+			x_vec[i] = x[i];
+		}
+
+		opt.report(k, fx, x_vec);
+	}
+
+	return 0;
+}
+
+// ------------------------------ //
+
+std::string LBFGS::decodeStatus(int ret)
+{
+	switch(ret)
 	{
 		case LBFGS_SUCCESS: return "LBFGS_SUCCESS";
 		case LBFGS_STOP: return "LBFGS_STOP";
@@ -133,72 +334,7 @@ std::string LBFGS::translateError(int ret)
 		case LBFGSERR_WIDTHTOOSMALL: return "LBFGSERR_WIDTHTOOSMALL";
 		case LBFGSERR_INVALIDPARAMETERS: return "LBFGSERR_INVALIDPARAMETERS";
 		case LBFGSERR_INCREASEGRADIENT: return "LBFGSERR_INCREASEGRADIENT";
-		default: return "uninterpretable error";
 	}
-}
-
-lbfgsfloatval_t LBFGS::evaluate(
-    void *instance, const lbfgsfloatval_t *x, lbfgsfloatval_t *g,
-    const int n, const lbfgsfloatval_t step)
-{
-    LibLbfgsAdapter* adapter = (LibLbfgsAdapter*) instance;
-
-    return adapter->evaluate(x, g, n, step);
-}
-
-int LBFGS::progress(
-    void *instance, const lbfgsfloatval_t *x, const lbfgsfloatval_t *g,
-    const lbfgsfloatval_t fx, const lbfgsfloatval_t xnorm, const lbfgsfloatval_t gnorm,
-    const lbfgsfloatval_t step, int n, int k, int ls)
-{
-    LibLbfgsAdapter* adapter = (LibLbfgsAdapter*) instance;
-
-    return adapter->progress(x, g, fx, xnorm, gnorm, step, n, k, ls);
-}
-
-LBFGS::LibLbfgsAdapter::LibLbfgsAdapter(
-        const DifferentiableOptimization &opt,
-        void *tempStorage, int n, bool verbose)
-:   opt(opt),
-    n(n),
-    verbose(verbose),
-    x_vec(n),
-    grad_vec(n),
-    tempStorage(tempStorage)
-{    
-}
-
-lbfgsfloatval_t LBFGS::LibLbfgsAdapter::evaluate(
-        const lbfgsfloatval_t *x, lbfgsfloatval_t *g,
-        const int n, const lbfgsfloatval_t step)
-{
-    for (int i = 0; i < n; i++)
-    {
-        x_vec[i] = x[i];
-    }
-
-    double fx = opt.f(x_vec, tempStorage);
-
-    opt.grad(x_vec, grad_vec, tempStorage);
-
-    for (int i = 0; i < n; i++)
-    {
-        g[i] = grad_vec[i];
-    }
-
-    return fx;
-}
-
-int LBFGS::LibLbfgsAdapter::progress(
-    const lbfgsfloatval_t *x, const lbfgsfloatval_t *g,
-    const lbfgsfloatval_t fx, const lbfgsfloatval_t xnorm,
-    const lbfgsfloatval_t gnorm, const lbfgsfloatval_t step,
-    int n, int k, int ls)
-{
-    if (verbose)
-    {
-        std::cout << k << ": " << fx << "\n";
-    }
-
-    return 0;
+	
+	return "UNKNOWN_STATUS_CODE";
 }

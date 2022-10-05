@@ -75,6 +75,58 @@ void joinMultipleEPSIntoSinglePDF(FileName fn_pdf, std::vector<FileName> fn_eps)
     }
 
 }
+bool concatenatePDFfiles(FileName fn_pdf_out, FileName pdf1, FileName pdf2)
+{
+	std::vector<FileName> fn_pdfs;
+	fn_pdfs.push_back(pdf1);
+	fn_pdfs.push_back(pdf2);
+	return concatenatePDFfiles(fn_pdf_out, fn_pdfs);
+
+}
+
+bool concatenatePDFfiles(FileName fn_pdf_out, std::vector<FileName> fn_pdfs)
+{
+
+	FileName fn_comb=fn_pdf_out;
+	// check if fn_pdf_out occurs in fn_pdfs
+	if (std::find(fn_pdfs.begin(), fn_pdfs.end(), fn_pdf_out) != fn_pdfs.end())
+	{
+	  // Element in vector.
+		fn_comb.withoutExtension() + "_tmp_combine.pdf";
+	}
+
+	std::string command="gs -dNOPAUSE -sDEVICE=pdfwrite -sOUTPUTFILE=";
+	command += fn_comb;
+	command += " -dBATCH ";
+	for (int i = 0; i < fn_pdfs.size(); i++)
+		command += fn_pdfs[i] + " ";
+
+	command += " > /dev/null";
+
+	if (system(command.c_str()))
+	{
+		std::cerr << " ERROR in executing: " << command << "\n";
+		return false;
+	}
+
+	if (fn_comb != fn_pdf_out)
+	{
+		// First remove fn_pdf_out
+		if (std::remove(fn_pdf_out.c_str()))
+		{
+			std::cerr << "ERROR in removing pre-existing " << fn_pdf_out << ".\n";
+			return false;
+		}
+		// Then move fn_comb to fn_pdf_out
+		if (std::rename(fn_comb.c_str(), fn_pdf_out.c_str()))
+		{
+			std::cerr << "ERROR in renaming " << fn_comb << " to " << fn_pdf_out << ".\n";
+			return false;
+		}
+	}
+
+	return true;
+}
 
 CPlot2D::CPlot2D(std::string title)
 {
@@ -145,6 +197,8 @@ CPlot2D::CPlot2D(std::string title)
     m_dYAxisLabelColor[2]=0.0;
 
     m_bDrawLegend=true;
+
+	m_bSizeSetExternally = false;
 }
 
 CPlot2D::~CPlot2D()
@@ -254,21 +308,29 @@ void CPlot2D::PrecomputeDimensions()
     m_dMaxXEndPoint=-DBL_MAX;
     m_dMaxYEndPoint=-DBL_MAX;
 
-    // for all data sets
-    for (int i=0;i<m_dataSets.size();++i) {
-        if (m_dMinXStartPoint>m_dataSets[i].GetXMinValue()) {
-            m_dMinXStartPoint=m_dataSets[i].GetXMinValue();
-        }
-        if (m_dMinYStartPoint>m_dataSets[i].GetYMinValue()) {
-            m_dMinYStartPoint=m_dataSets[i].GetYMinValue();
-        }
-        if (m_dMaxXEndPoint<m_dataSets[i].GetXMaxValue()) {
-            m_dMaxXEndPoint=m_dataSets[i].GetXMaxValue();
-        }
-        if (m_dMaxYEndPoint<m_dataSets[i].GetYMaxValue()) {
-            m_dMaxYEndPoint=m_dataSets[i].GetYMaxValue();
-        }
-    }
+	if (!m_bSizeSetExternally) {
+		// for all data sets
+		for (int i=0;i<m_dataSets.size();++i) {
+			if (m_dMinXStartPoint>m_dataSets[i].GetXMinValue()) {
+				m_dMinXStartPoint=m_dataSets[i].GetXMinValue();
+			}
+			if (m_dMinYStartPoint>m_dataSets[i].GetYMinValue()) {
+				m_dMinYStartPoint=m_dataSets[i].GetYMinValue();
+			}
+			if (m_dMaxXEndPoint<m_dataSets[i].GetXMaxValue()) {
+				m_dMaxXEndPoint=m_dataSets[i].GetXMaxValue();
+			}
+			if (m_dMaxYEndPoint<m_dataSets[i].GetYMaxValue()) {
+				m_dMaxYEndPoint=m_dataSets[i].GetYMaxValue();
+			}
+		}
+	}
+	else {
+		m_dMinXStartPoint = m_dMinXStartPointOverride;
+		m_dMinYStartPoint = m_dMinYStartPointOverride;
+		m_dMaxXEndPoint = m_dMaxXEndPointOverride;
+		m_dMaxYEndPoint = m_dMaxYEndPointOverride;
+	}
 
     // Sjors 20Apr2016: prevent zero width of x,y axes
     if (fabs(m_dMinXStartPoint - m_dMaxXEndPoint) < 1e-10)
@@ -522,7 +584,16 @@ void CPlot2D::AddDataSet(std::vector<RFLOAT> yValues)
     	CDataPoint point=CDataPoint(i+1,yValues[i]);
         dataSet.AddDataPoint(point);
     }
-    m_dataSets.push_back(dataSet);
+	m_dataSets.push_back(dataSet);
+}
+
+void CPlot2D::SetViewArea(double start_x, double start_y, double end_x, double end_y)
+{
+	m_dMinXStartPointOverride = start_x;
+	m_dMaxXEndPointOverride = end_x;
+	m_dMinYStartPointOverride = start_y;
+	m_dMaxYEndPointOverride = end_y;
+	m_bSizeSetExternally = true;
 }
 
 void CPlot2D::DrawMarker(std::string symbol, double size, bool filled, double xLocation, double yLocation, int dataSet)
@@ -730,21 +801,21 @@ void CPlot2D::ComputeLabelTickSpacing(double dataMin, double dataMax, double *pl
 
 
     if (axis=="x") {
-        snprintf(m_cXAxisLabelFormat, 20, "%%.%df",nfrac);
+        snprintf(m_cXAxisLabelFormat,20,"%%.%df",nfrac);
         char temp[20];
         m_iXAxisNumberOfLabels=0;
         for (double x=*plotMin; x<*plotMax+.5*d; x+=d) {
-            sprintf(temp,m_cXAxisLabelFormat,x);
+            snprintf(temp,20,m_cXAxisLabelFormat,x);
             m_strXAxisLabels.push_back(temp);
             m_iXAxisNumberOfLabels++;
         }
     }
     else if (axis=="y") {
-        snprintf(m_cYAxisLabelFormat, 20, "%%.%df",nfrac);
+        snprintf(m_cYAxisLabelFormat,20,"%%.%df",nfrac);
         char temp[20];
         m_iYAxisNumberOfLabels=0;
         for (double x=*plotMin; x<*plotMax+.5*d; x+=d) {
-            sprintf(temp,m_cYAxisLabelFormat,x);
+            snprintf(temp,20,m_cYAxisLabelFormat,x);
             m_strYAxisLabels.push_back(temp);
             m_iYAxisNumberOfLabels++;
         }
@@ -915,6 +986,7 @@ void CPlot2D::DrawLegendPostScript()
         double r,g,b;
         m_dataSets[i].GetDatasetColor(&r,&g,&b);
 
+		if (m_dataSets[i].GetDatasetTitle() == "") continue;
 
         if (m_dataSets[i].GetDrawLine()) {
             // draw the line

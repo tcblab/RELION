@@ -49,8 +49,6 @@
 #include <string.h>
 #include <math.h>
 
-static pthread_mutex_t fftw_plan_mutex = PTHREAD_MUTEX_INITIALIZER;
-
 //#define TIMING_FFTW
 #ifdef TIMING_FFTW
 	#define RCTIC(label) (timer_fftw.tic(label))
@@ -137,22 +135,20 @@ void FourierTransformer::cleanup()
 void FourierTransformer::destroyPlans()
 {
 	// Anything to do with plans has to be protected for threads!
-	pthread_mutex_lock(&fftw_plan_mutex);
-
-	if (plans_are_set)
+	#pragma omp critical(FourierTransformer_fftw_plan)
 	{
+		if (plans_are_set)
+		{
 #ifdef RELION_SINGLE_PRECISION
-		fftwf_destroy_plan(fPlanForward);
-		fftwf_destroy_plan(fPlanBackward);
+			fftwf_destroy_plan(fPlanForward);
+			fftwf_destroy_plan(fPlanBackward);
 #else
-		fftw_destroy_plan(fPlanForward);
-		fftw_destroy_plan(fPlanBackward);
+			fftw_destroy_plan(fPlanForward);
+			fftw_destroy_plan(fPlanBackward);
 #endif
-		plans_are_set = false;
+			plans_are_set = false;
+		}
 	}
-
-	pthread_mutex_unlock(&fftw_plan_mutex);
-
 }
 
 // Initialization ----------------------------------------------------------
@@ -216,21 +212,23 @@ void FourierTransformer::setReal(MultidimArray<RFLOAT> &input, bool force_new_pl
 		plans_are_set = true;
 
 		RCTIC(TIMING_FFTW_PLAN);
-		pthread_mutex_lock(&fftw_plan_mutex);
+
+		#pragma omp critical(FourierTransformer_fftw_plan)
+		{
 #ifdef RELION_SINGLE_PRECISION
-		fPlanForward = fftwf_plan_dft_r2c(ndim, N, MULTIDIM_ARRAY(*fReal),
-		                                  (fftwf_complex*) MULTIDIM_ARRAY(fFourier), FFTW_ESTIMATE);
-		fPlanBackward = fftwf_plan_dft_c2r(ndim, N,
-		                                   (fftwf_complex*) MULTIDIM_ARRAY(fFourier), MULTIDIM_ARRAY(*fReal),
-		                                   FFTW_ESTIMATE);
+			fPlanForward = fftwf_plan_dft_r2c(ndim, N, MULTIDIM_ARRAY(*fReal),
+							  (fftwf_complex*) MULTIDIM_ARRAY(fFourier), FFTW_ESTIMATE);
+			fPlanBackward = fftwf_plan_dft_c2r(ndim, N,
+							   (fftwf_complex*) MULTIDIM_ARRAY(fFourier), MULTIDIM_ARRAY(*fReal),
+							   FFTW_ESTIMATE);
 #else
-		fPlanForward = fftw_plan_dft_r2c(ndim, N, MULTIDIM_ARRAY(*fReal),
-		                                 (fftw_complex*) MULTIDIM_ARRAY(fFourier), FFTW_ESTIMATE);
-		fPlanBackward = fftw_plan_dft_c2r(ndim, N,
-		                                  (fftw_complex*) MULTIDIM_ARRAY(fFourier), MULTIDIM_ARRAY(*fReal),
-		                                  FFTW_ESTIMATE);
+			fPlanForward = fftw_plan_dft_r2c(ndim, N, MULTIDIM_ARRAY(*fReal),
+							 (fftw_complex*) MULTIDIM_ARRAY(fFourier), FFTW_ESTIMATE);
+			fPlanBackward = fftw_plan_dft_c2r(ndim, N,
+							  (fftw_complex*) MULTIDIM_ARRAY(fFourier), MULTIDIM_ARRAY(*fReal),
+							  FFTW_ESTIMATE);
 #endif
-		pthread_mutex_unlock(&fftw_plan_mutex);
+		}	
 		RCTOC(TIMING_FFTW_PLAN);
 
 		if (fPlanForward == NULL || fPlanBackward == NULL)
@@ -292,19 +290,20 @@ void FourierTransformer::setReal(MultidimArray<Complex > &input, bool force_new_
 		plans_are_set = true;
 
 		RCTIC(TIMING_FFTW_PLAN);
-		pthread_mutex_lock(&fftw_plan_mutex);
+		#pragma omp critical(FourierTransformer_fftw_plan)
+		{
 #ifdef RELION_SINGLE_PRECISION
-		fPlanForward = fftwf_plan_dft(ndim, N, (fftwf_complex*) MULTIDIM_ARRAY(*fComplex),
-		                              (fftwf_complex*) MULTIDIM_ARRAY(fFourier), FFTW_FORWARD, FFTW_ESTIMATE);
-		fPlanBackward = fftwf_plan_dft(ndim, N, (fftwf_complex*) MULTIDIM_ARRAY(fFourier),
-		                               (fftwf_complex*) MULTIDIM_ARRAY(*fComplex), FFTW_BACKWARD, FFTW_ESTIMATE);
+			fPlanForward = fftwf_plan_dft(ndim, N, (fftwf_complex*) MULTIDIM_ARRAY(*fComplex),
+						      (fftwf_complex*) MULTIDIM_ARRAY(fFourier), FFTW_FORWARD, FFTW_ESTIMATE);
+			fPlanBackward = fftwf_plan_dft(ndim, N, (fftwf_complex*) MULTIDIM_ARRAY(fFourier),
+						       (fftwf_complex*) MULTIDIM_ARRAY(*fComplex), FFTW_BACKWARD, FFTW_ESTIMATE);
 #else
-		fPlanForward = fftw_plan_dft(ndim, N, (fftw_complex*) MULTIDIM_ARRAY(*fComplex),
-		                             (fftw_complex*) MULTIDIM_ARRAY(fFourier), FFTW_FORWARD, FFTW_ESTIMATE);
-		fPlanBackward = fftw_plan_dft(ndim, N, (fftw_complex*) MULTIDIM_ARRAY(fFourier),
-		                              (fftw_complex*) MULTIDIM_ARRAY(*fComplex), FFTW_BACKWARD, FFTW_ESTIMATE);
+			fPlanForward = fftw_plan_dft(ndim, N, (fftw_complex*) MULTIDIM_ARRAY(*fComplex),
+						     (fftw_complex*) MULTIDIM_ARRAY(fFourier), FFTW_FORWARD, FFTW_ESTIMATE);
+			fPlanBackward = fftw_plan_dft(ndim, N, (fftw_complex*) MULTIDIM_ARRAY(fFourier),
+						      (fftw_complex*) MULTIDIM_ARRAY(*fComplex), FFTW_BACKWARD, FFTW_ESTIMATE);
 #endif
-		pthread_mutex_unlock(&fftw_plan_mutex);
+		}		
 		RCTOC(TIMING_FFTW_PLAN);
 
 		if (fPlanForward == NULL || fPlanBackward == NULL)
@@ -955,6 +954,56 @@ void shiftImageInFourierTransform(MultidimArray<Complex > &in,
 		break;
 	default:
 		REPORT_ERROR("shiftImageInFourierTransform ERROR: dimension should be 1, 2 or 3!");
+	}
+}
+
+// Shift an image through phase-shifts in its Fourier Transform (without pretabulated sine and cosine)
+void shiftImageInContinuousFourierTransform(MultidimArray<Complex > &in, MultidimArray<Complex > &out,
+                                            RFLOAT oridim, RFLOAT xshift, RFLOAT yshift, RFLOAT zshift)
+{
+	out.resize(in);
+	RFLOAT dotp, a, b, c, d, ac, bd, ab_cd, x, y, z;
+
+	xshift /= -oridim;
+	yshift /= -oridim;
+	zshift /= -oridim;
+	if (ABS(xshift) < XMIPP_EQUAL_ACCURACY && ABS(yshift) < XMIPP_EQUAL_ACCURACY && ABS(zshift) < XMIPP_EQUAL_ACCURACY)
+	{
+		out = in;
+		return;
+	}
+
+	long iniY(0), iniZ(0);
+
+	if (YSIZE(in) > 1)
+		iniY = YSIZE(in) / 2;
+
+	if (ZSIZE(in) > 1)
+		iniZ = ZSIZE(in) / 2;
+
+	for (long int k=0; k<ZSIZE(in); k++)
+	{
+		z = k - iniZ;
+		for (long int i=0; i<YSIZE(in); i++)
+		{
+			y = i - iniY;
+			for (long int j=0; j<XSIZE(in); j++)
+			{
+				x = j;
+				dotp = 2 * PI * (x * xshift + y * yshift + z * zshift);
+#ifdef RELION_SINGLE_PRECISION
+				SINCOSF(dotp, &b, &a);
+#else
+				SINCOS(dotp, &b, &a);
+#endif
+				c = DIRECT_A3D_ELEM(in, k, i, j).real;
+				d = DIRECT_A3D_ELEM(in, k, i, j).imag;
+				ac = a * c;
+				bd = b * d;
+				ab_cd = (a + b) * (c + d);
+				DIRECT_A3D_ELEM(out, k, i, j) = Complex(ac - bd, ab_cd - ac - bd);
+			}
+		}
 	}
 }
 

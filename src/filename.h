@@ -437,6 +437,9 @@ public:
 	// Get the other half map by swapping half1 and half2
 	bool getTheOtherHalf(FileName &fn_out) const;
 
+	// Get my half map by swapping half# if required
+	bool getHalf(FileName &fn_out, int halfset) const;
+
 	bool validateCharactersStrict(bool do_allow_double_dollar = false) const;
 
 	/** From a wild-card containing filename get a vector with all existing filenames,
@@ -496,8 +499,14 @@ void copy(const FileName &fn_src, const FileName &fn_dest);
 /** Move a file */
 void move(const FileName &fn_src, const FileName &fn_dest);
 
-/** Make a directory tree*/
+/** Make a directory tree. mode=0777 is OK, because it is modified by umask.*/
 int mktree(const FileName &fn_dir, mode_t mode = 0777);
+
+/* wrapper to realpath in stdlib */
+FileName realpath(const FileName &fn, bool allow_nonexisting_path = false);
+
+/* wrapper to symlink in stdlib */
+void symlink(const FileName &src, const FileName &dst);
 
 /** True if the path is a directory */
 bool isDirectory (const FileName &fn);

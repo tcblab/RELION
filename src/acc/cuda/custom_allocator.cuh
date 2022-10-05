@@ -2,7 +2,7 @@
 #define CUDA_CUSTOM_ALLOCATOR_CUH_
 // This is where custom allocator should be. Commented out for now, to avoid double declaration.
 
-#ifdef CUDA
+#ifdef _CUDA_ENABLED
 #include "src/acc/cuda/cuda_settings.h"
 #include <cuda_runtime.h>
 #endif
@@ -11,7 +11,6 @@
 #include <fstream>
 #include <iostream>
 #include <vector>
-#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -114,7 +113,7 @@ private:
 
 	bool cache;
 
-	pthread_mutex_t mutex;
+	omp_lock_t mutex;
 
 
 	//Look for the first suited space
@@ -464,14 +463,7 @@ public:
 	{
 		_setup();
 
-		int mutex_error = pthread_mutex_init(&mutex, NULL);
-
-		if (mutex_error != 0)
-		{
-			printf("ERROR: Mutex could not be created for alloactor. CODE: %d.\n", mutex_error);
-			fflush(stdout);
-			CRITICAL(ERR_CAMUX);
-		}
+		omp_init_lock(&mutex);
 	}
 
 	void resize(size_t size)
@@ -605,7 +597,7 @@ public:
 			Lock ml(&mutex);
 			_clear();
 		}
-		pthread_mutex_destroy(&mutex);
+		omp_destroy_lock(&mutex);
 	}
 
 	//Thread-safe wrapper functions

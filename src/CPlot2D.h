@@ -35,8 +35,13 @@
 /* SHWS: join multiple eps files into a single pdf
  *
  */
-
 void joinMultipleEPSIntoSinglePDF(FileName fn_pdf, std::vector<FileName> fn_eps);
+
+/* SHWS: concatenate multiple PDF files into a single one
+ *
+ */
+bool concatenatePDFfiles(FileName fn_pdf_out, FileName pdf1, FileName pdf2);
+bool concatenatePDFfiles(FileName fn_pdf_out, std::vector<FileName> fn_pdfs);
 
 /* EL: Including all of the std namespace on the global level both in this and
  *     every single file that includes this header will lead to ambiguous
@@ -862,7 +867,7 @@ void joinMultipleEPSIntoSinglePDF(FileName fn_pdf, std::vector<FileName> fn_eps)
       */
      bool GetDrawLegend();
 
-     /*! 
+     /*!
       Get and Set a flag that flips the orientation of the Y axis.
      */
      bool GetFlipY();
@@ -891,6 +896,8 @@ void joinMultipleEPSIntoSinglePDF(FileName fn_pdf, std::vector<FileName> fn_eps)
       */
      void AddDataSet(std::vector<RFLOAT> xValues, std::vector<RFLOAT> yValues);
      void AddDataSet(std::vector<RFLOAT> yValues);
+
+	 void SetViewArea(double origin_x, double origin_y, double width, double height);
 
 
  protected:
@@ -1016,7 +1023,7 @@ void joinMultipleEPSIntoSinglePDF(FileName fn_pdf, std::vector<FileName> fn_eps)
      double m_dMinXStartPoint; /*!< Minimum starting point along x axis over all data sets. */
      double m_dMinYStartPoint; /*!< Minimum starting point along y axis over all data sets. */
      double m_dMaxXEndPoint; /*!< Maximum end point along x axis over all data sets. */
-     double m_dMaxYEndPoint; /*!< Maximum end point along y axis over all data sets. */
+	 double m_dMaxYEndPoint; /*!< Maximum end point along y axis over all data sets. */
 
      // line widths
      double m_dFrameLineWidth; /*!< Width (thickness) of line used for the frame. */
@@ -1058,6 +1065,13 @@ void joinMultipleEPSIntoSinglePDF(FileName fn_pdf, std::vector<FileName> fn_eps)
 
      // data storage
      std::vector<CDataSet> m_dataSets; /*!< Storage for the datasets, implemented as a vector. */
+
+	 // JZ, 6-2020: allow the user to control the view area manually
+	 bool m_bSizeSetExternally;
+	 double m_dMinXStartPointOverride;
+	 double m_dMinYStartPointOverride;
+	 double m_dMaxXEndPointOverride;
+	 double m_dMaxYEndPointOverride;
  };
 
  inline void CPlot2D::SetTitle(std::string title)

@@ -40,7 +40,7 @@
 #include "src/funcs.h"
 #include "src/filename.h"
 #include "src/gui_entries.h"
-#include "src/jaz/obs_model.h"
+#include <src/jaz/single_particle/obs_model.h>
 
 #define MWCOL1 300
 #define MWCOL2 60
@@ -78,6 +78,9 @@ public:
 	// MetaDataTable of input micrographs
 	MetaDataTable MDin;
 
+	// MetaDataTable with the output coordinate files
+	MetaDataTable MDcoords;
+
 	// Observation model of input micrographs
 	ObservationModel obsModel;
 
@@ -92,6 +95,9 @@ private:
     static void cb_menubar_save(Fl_Widget*, void*);
     inline void cb_menubar_save_i();
 
+    static void cb_menubar_select_all(Fl_Widget*, void*);
+    inline void cb_menubar_select_all_i();
+
     static void cb_menubar_invert_selection(Fl_Widget*, void*);
     inline void cb_menubar_invert_selection_i();
 
@@ -101,8 +107,11 @@ private:
     static void cb_menubar_recount(Fl_Widget*, void*);
     inline void cb_menubar_recount_i();
 
+    static void cb_menubar_setFOM(Fl_Widget*, void*);
+    inline void cb_menubar_setFOM_i();
+
     void readOutputStarfile();
-    void writeOutputStarfile();
+    void writeOutputStarfiles(bool verb = true);
 
 };
 
@@ -115,6 +124,9 @@ public:
 
 	// The input micrographs
 	MetaDataTable MDin;
+
+	// MetaDataTable with the output coordinate files
+	MetaDataTable MDcoords;
 
 	// Observation model for the input mirographs
 	ObservationModel obsModel;
@@ -141,10 +153,6 @@ public:
 
 	// General function to decide what to do
 	void run();
-
-private:
-
-	void writeOutput();
 
 };
 

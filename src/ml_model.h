@@ -25,6 +25,7 @@
 #include "src/metadata_table.h"
 #include "src/exp_model.h"
 #include "src/healpix_sampling.h"
+#include "src/gradient_optimisation.h"
 
 #define ML_BLOB_ORDER 0
 #define ML_BLOB_RADIUS 1.9
@@ -58,13 +59,16 @@ public:
 	// Number of independent bodies for multi-body refinement
 	int nr_bodies;
 
-	// Number of image groups with separate sigma2_noise spectra
+	// Number of image groups with separate scale corrections
 	int nr_groups;
 
-	// Perform SGD instead of expectation maximization?
-	bool do_sgd;
+	// Number of optics groups for separate sigma2_noise spectra
+	int nr_optics_groups;
 
-	// Number of particles in each group
+	// Keep track of the first and/or second moment of the gradient
+	bool do_grad;
+
+	// Number of particles in each (micrograph) group
 	std::vector<long int> nr_particles_per_group;
 
 	// Number of directions (size of pdf_direction);
@@ -97,8 +101,9 @@ public:
 	// Vector with all reference images
 	std::vector<MultidimArray<RFLOAT> > Iref;
 
-	// Vector with all SGD gradients
-	std::vector<MultidimArray<RFLOAT> > Igrad;
+	// Vector with all gradient moments
+	std::vector<MultidimArray<Complex> > Igrad1;
+	std::vector<MultidimArray<Complex> > Igrad2;
 
 	// Vector with masks for all bodies in multi-body refinement
 	std::vector<MultidimArray<RFLOAT> > masks_bodies;
@@ -145,6 +150,7 @@ public:
 
 	// One value for each class
 	std::vector<RFLOAT > pdf_class;
+	std::vector<RFLOAT > class_age;
 
 	// One array for each class
 	std::vector<MultidimArray<RFLOAT> > pdf_direction;
@@ -211,6 +217,10 @@ public:
 	// Helical rise (in Angstroms)
 	std::vector<RFLOAT> helical_rise;
 
+	// Self-organizing map
+	SomGraph som;
+	int last_som_add_iter;
+
 	// Search range of helical twist (in degrees)
 	RFLOAT helical_twist_min,  helical_twist_max, helical_twist_inistep;
 
@@ -222,6 +232,11 @@ public:
 
 	// Process data on GPU
 	bool do_gpu;
+
+	bool pseudo_halfsets;
+
+	// Store filenames of references for Liyi's class feature program
+	std::vector<FileName> ref_names;
 
 public:
 
@@ -236,6 +251,7 @@ public:
 		nr_classes(0),
 		nr_bodies(0),
 		nr_groups(0),
+		nr_optics_groups(0),
 		nr_directions(0),
 		LL(0),
 		padding_factor(0.),
@@ -258,7 +274,10 @@ public:
 		helical_rise_max(0),
 		helical_rise_inistep(0),
 		norm_body_mask_overlap(false),
-		do_gpu(false)
+		som(),
+		last_som_add_iter(0),
+		do_gpu(false),
+		pseudo_halfsets(false)
 	{
 		clear();
 	}
@@ -285,7 +304,9 @@ public:
 			nr_classes = MD.nr_classes;
 			nr_bodies = MD.nr_bodies;
 			nr_groups = MD.nr_groups;
-			do_sgd = MD.do_sgd;
+			nr_optics_groups = MD.nr_optics_groups;
+			do_grad = MD.do_grad;
+			pseudo_halfsets = MD.pseudo_halfsets;
 			nr_directions = MD.nr_directions;
 			LL = MD.LL;
 			padding_factor = MD.padding_factor;
@@ -308,7 +329,8 @@ public:
 			helical_rise_max = MD.helical_rise_max;
 			helical_rise_inistep= MD.helical_rise_inistep;
 			Iref = MD.Iref;
-			Igrad = MD.Igrad;
+			Igrad1 = MD.Igrad1;
+			Igrad2 = MD.Igrad2;
 			masks_bodies = MD.masks_bodies;
 			com_bodies = MD.com_bodies;
 			orient_bodies = MD.orient_bodies;
@@ -329,6 +351,7 @@ public:
 			data_vs_prior_class = MD.data_vs_prior_class;
 			fourier_coverage_class = MD.fourier_coverage_class;
 			pdf_class = MD.pdf_class;
+			class_age = MD.class_age;
 			pdf_direction = MD.pdf_direction;
 			prior_offset_class = MD.prior_offset_class;
 			nr_particles_per_group = MD.nr_particles_per_group;
@@ -340,6 +363,8 @@ public:
 			helical_twist = MD.helical_twist;
 			helical_rise = MD.helical_rise;
 			do_gpu = MD.do_gpu;
+			pseudo_halfsets = MD.pseudo_halfsets;
+			ref_names = MD.ref_names;
 	        }
         	return *this;
 	}
@@ -348,7 +373,8 @@ public:
 	void clear()
 	{
 		Iref.clear();
-		Igrad.clear();
+		Igrad1.clear();
+		Igrad2.clear();
 		masks_bodies.clear();
 		com_bodies.clear();
 		orient_bodies.clear();
@@ -370,6 +396,7 @@ public:
 		fourier_coverage_class.clear();
 		prior_offset_class.clear();
 		pdf_class.clear();
+		class_age.clear();
 		pdf_direction.clear();
 		nr_particles_per_group.clear();
 		ref_dim = data_dim = ori_size = nr_classes = nr_bodies = nr_groups = nr_directions = interpolator = r_min_nn;
@@ -383,17 +410,20 @@ public:
 		orientability_contrib.clear();
 		helical_twist.clear();
 		helical_rise.clear();
-		do_sgd=false;
+		ref_names.clear();
+		do_grad=false;
+		pseudo_halfsets=false;
 	}
 
 	// Initialise vectors with the right size
-	void initialise(bool _do_sgd = false);
+	void initialise(bool _do_grad = false, bool _pseudo_halfsets = false);
 
 	//Read a model from a file
-	void read(FileName fn_in);
+	void read(FileName fn_in, int nr_optics_groups_from_mydata, bool _do_grad=false, bool _pseudo_halfsets=false);
 
 	// Write a model to disc
-	void write(FileName fn_out, HealpixSampling &sampling, bool do_write_bild = true, bool do_only_write_images = false);
+	void write(FileName fn_out, HealpixSampling &sampling,
+			bool do_write_bild = true, bool do_only_write_images = false);
 
 	//Read a tau-spectrum from a STAR file
 	void readTauSpectrum(FileName fn_tau, int verb);
@@ -402,7 +432,7 @@ public:
 	// Also set do_average_unaligned and do_generate_seeds flags
 	void initialiseFromImages(FileName fn_ref, bool _is_3d_model, Experiment &_mydata,
 			bool &do_average_unaligned, bool &do_generate_seeds, bool &refs_are_ctf_corrected,
-			RFLOAT ref_angpix = -1., bool _do_sgd = false, bool do_trust_ref = false, bool verb = false);
+			RFLOAT ref_angpix = -1., bool _do_grad = false, bool _pseudo_halfsets = false, bool do_trust_ref = false, bool verb = false);
 
 	RFLOAT getResolution(int ipix)	{ return (RFLOAT)ipix/(pixel_size * ori_size); }
 
@@ -438,6 +468,8 @@ public:
 	void initialiseHelicalParametersLists(RFLOAT _helical_twist, RFLOAT _helical_rise);
 
 	void calculateTotalFourierCoverage();
+
+	void reset_class(int class_idx, int to_class_idx = -1);
 };
 
 class MlWsumModel: public MlModel
@@ -446,9 +478,15 @@ public:
 	// One backprojector for CTF-corrected estimate of each class;
 	std::vector<BackProjector > BPref;
 
-	// Store the sum of the weights inside each group
-	// That is the number of particles inside each group
+	// Store the sum of the weights inside each optics group
+	// That is the number of particles inside each optics group
 	std::vector<RFLOAT> sumw_group;
+
+    // Resolution-dependent sum of CTF^2 for ctf_premultiplied correction of tau2 estimates
+    std::vector<MultidimArray<RFLOAT> > sumw_ctf2;
+
+    // Resolution-dependent sum of multiplicities for subtomogram averaging
+    std::vector<MultidimArray<RFLOAT> > sumw_stMulti;
 
 	// For the refinement of group intensity scales and bfactors
 	// For each group store weighted sums of experimental image times reference image as a function of resolution
@@ -474,11 +512,15 @@ public:
 	{
 		BPref.clear();
 		sumw_group.clear();
+        sumw_stMulti.clear();
+        sumw_ctf2.clear();
+        wsum_signal_product.clear();
+        wsum_reference_power.clear();
 		MlModel::clear();
 	}
 
 	// Initialise all weighted sums (according to size of corresponding model
-	void initialise(MlModel &_model, FileName fn_sym = "c1", bool asymmetric_padding = false, bool _skip_gridding = false);
+	void initialise(MlModel &_model, FileName fn_sym = "c1", bool asymmetric_padding = false, bool _skip_gridding = false, bool _pseudo_halfsets = false);
 
 	// Initialize all weighted sums to zero (with resizing the BPrefs to current_size)
 	void initZeros();

@@ -78,6 +78,11 @@
  * physical definition. It also defines 'kp', 'ip' and 'jp', which are the logical coordinates
  * It also works for 1D or 2D FFTW transforms
  *
+ * FFTW format means, for N = 6,
+ *  kx = [0, 1, 2, 3], XSIZE = 4 = N/2 + 1
+ *  ky = [0, 1, 2, 3, -2, -1], YSIZE = 6
+ *  kz = [0, 1, 2, 3, -2, -1], ZSIZE = 6
+ *
  * @code
  * FOR_ALL_ELEMENTS_IN_FFTW_TRANSFORM(V)
  * {
@@ -921,6 +926,11 @@ void shiftImageInFourierTransformWithTabSincos(MultidimArray<Complex> &in, Multi
 // or both can be in Angstroms
 void shiftImageInFourierTransform(MultidimArray<Complex> &in, MultidimArray<Complex> &out,
                                   RFLOAT oridim, RFLOAT shift_x, RFLOAT shift_y, RFLOAT shift_z = 0.);
+
+// As shiftImageInFourierTransform, but performs shifts on continues Fourier transforms,
+// which is not the format that FFTW outputs but rather that which is outputted by e.g. backprojection.
+void shiftImageInContinuousFourierTransform(MultidimArray<Complex > &in, MultidimArray<Complex > &out,
+                                            RFLOAT oridim, RFLOAT xshift, RFLOAT yshift, RFLOAT zshift);
 
 #define POWER_SPECTRUM 0
 #define AMPLITUDE_SPECTRUM 1

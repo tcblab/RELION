@@ -31,8 +31,7 @@
 #include "src/metadata_table.h"
 #include "src/image.h"
 #include "src/micrograph_model.h"
-#include "src/jaz/new_ft.h"
-#include "src/jaz/obs_model.h"
+#include <src/jaz/single_particle/obs_model.h>
 
 class MotioncorrRunner
 {
@@ -60,9 +59,15 @@ public:
 	// Information about the optics groups
 	ObservationModel obsModel;
 
+	// Skip generation of logfile
+	bool do_skip_logfile;
+
 	// Use our own implementation
 	bool do_own;
 	bool interpolate_shifts;
+
+	// Write in float16 (MRC mode 12)?
+	bool write_float16;
 
 	// Maximum number of iterations
 	int max_iter;

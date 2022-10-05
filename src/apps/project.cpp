@@ -18,6 +18,9 @@
  * author citations must be preserved.
  ***************************************************************************/
 
+// LIMITATIONS:
+//  This program ignores (anisotropic) magnification and antisymmetric aberrations!
+
 #include <src/projector.h>
 #include <src/backprojector.h>
 #include <src/fftw.h>
@@ -29,10 +32,9 @@
 #include <src/euler.h>
 #include <src/time.h>
 #include <src/metadata_table.h>
-#include <src/ml_model.h>
 #include <src/exp_model.h>
 #include <src/healpix_sampling.h>
-#include <src/jaz/obs_model.h>
+#include <src/jaz/single_particle/obs_model.h>
 class project_parameters
 {
 public:
@@ -41,12 +43,11 @@ public:
 	RFLOAT rot, tilt, psi, xoff, yoff, zoff, angpix, maxres, stddev_white_noise, particle_diameter, ana_prob_range, ana_prob_step, sigma_offset;
 	int padding_factor;
 	int r_max, r_min_nn, interpolator, nr_uniform;
-	bool do_only_one, do_ctf, do_ctf2, ctf_phase_flipped, do_ctf_intact_1st_peak, do_timing, do_add_noise, do_subtract_exp, do_ignore_particle_name, do_3d_rot;
+	bool do_only_one, do_ctf, do_ctf2, ctf_phase_flipped, do_ctf_intact_1st_peak, do_timing, do_add_noise, do_subtract_exp, do_ignore_particle_name, do_3d_rot, write_float16;
 	bool do_simulate;
 	RFLOAT simulate_SNR;
 	// I/O Parser
 	IOParser parser;
-	MlModel model;
 	ObservationModel obsModel;
 
 	void usage()
@@ -61,6 +62,7 @@ public:
 		int general_section = parser.addSection("Options");
 		fn_map = parser.getOption("--i", "Input map to be projected");
 		fn_out = parser.getOption("--o", "Rootname for output projections", "proj");
+		write_float16  = parser.checkOption("--float16", "Write in half-precision 16 bit floating point numbers (MRC mode 12), instead of 32 bit (MRC mode 0).");
 		do_ctf = parser.checkOption("--ctf", "Apply CTF to reference projections");
 		ctf_phase_flipped = parser.checkOption("--ctf_phase_flip", "Flip phases of the CTF in the output projections");
 		do_ctf_intact_1st_peak = parser.checkOption("--ctf_intact_first_peak", "Ignore CTFs until their first peak?");
@@ -68,7 +70,7 @@ public:
 		fn_mask = parser.getOption("--mask", "Mask that will be applied to the input map prior to making projections", "");
 		fn_ang = parser.getOption("--ang", "Particle STAR file with orientations and CTF for multiple projections (if None, assume single projection)", "None");
 		nr_uniform = textToInteger(parser.getOption("--nr_uniform", " OR get this many random samples from a uniform angular distribution", "-1"));
-		sigma_offset = textToFloat(parser.getOption("--sigma_offset", "Apply Gaussian errors with this stddev to the XY-offsets", "0"));
+		sigma_offset = textToFloat(parser.getOption("--sigma_offset", "Apply Gaussian errors (A) with this stddev to the XY-offsets", "0"));
 		rot = textToFloat(parser.getOption("--rot", "First Euler angle (for a single projection)", "0"));
 		tilt = textToFloat(parser.getOption("--tilt", "Second Euler angle (for a single projection)", "0"));
 		psi = textToFloat(parser.getOption("--psi", "Third Euler angle (for a single projection)", "0"));
@@ -99,7 +101,11 @@ public:
 
 		if (do_simulate)
 		{
-			do_ctf = true;
+			if (!do_ctf)
+			{
+				std::cerr << "WARNING: with --simulate, --ctf is automatically activated." << std::endl;
+				do_ctf = true;
+			}
 		}
 
 		// Check for errors in the command-line option
@@ -109,6 +115,10 @@ public:
 
 	void project()
 	{
+		int ori_size, nr_groups;
+		std::vector<FileName> group_names;
+		std::vector<MultidimArray<RFLOAT > > sigma2_noise;
+
 		MetaDataTable DFo, MDang, MDang_sim;
 		Matrix2D<RFLOAT> A3D;
 		FileName fn_expimg;
@@ -155,8 +165,8 @@ public:
 				MDang.setValue(EMDL_ORIENT_ROT, rot);
 				MDang.setValue(EMDL_ORIENT_TILT, tilt);
 				MDang.setValue(EMDL_ORIENT_PSI, psi);
-				MDang.setValue(EMDL_ORIENT_ORIGIN_X, xoff);
-				MDang.setValue(EMDL_ORIENT_ORIGIN_Y, yoff);
+				MDang.setValue(EMDL_ORIENT_ORIGIN_X_ANGSTROM, xoff);
+				MDang.setValue(EMDL_ORIENT_ORIGIN_Y_ANGSTROM, yoff);
 				MDang.setValue(EMDL_IMAGE_OPTICS_GROUP, 1);
 			}
 
@@ -179,7 +189,14 @@ public:
 		else if (!do_only_one)
 		{
 			std::cout << " Reading STAR file with all angles " << fn_ang << std::endl;
-			ObservationModel::loadSafely(fn_ang, obsModel, MDang);
+			if (do_ignore_particle_name)
+            {
+                MDang.read(fn_ang);
+            }
+            else
+            {
+                ObservationModel::loadSafely(fn_ang, obsModel, MDang);
+            }
 			std::cout << " Done reading STAR file!" << std::endl;
 
 
@@ -270,7 +287,7 @@ public:
 			// Shift the image back to the center...
 			CenterFFT(img(), false);
 			img.setSamplingRateInHeader(angpix);
-			img.write(fn_out);
+			img.write(fn_out, -1, false, WRITE_OVERWRITE, write_float16 ? Float16: Float);
 			std::cout<<" Done writing "<<fn_out<<std::endl;
 		}
 		else // not do_only_one
@@ -284,7 +301,44 @@ public:
 			if (do_add_noise)
 			{
 				if (fn_model != "")
-					model.read(fn_model);
+				{
+					std::ifstream in(fn_model.data(), std::ios_base::in);
+					if (in.fail())
+						REPORT_ERROR( (std::string) "MlModel::readStar: File " + fn_model + " cannot be read." );
+
+					MetaDataTable MDlog, MDgroup, MDsigma;
+					MDlog.readStar(in, "model_general");
+					if (!MDlog.getValue(EMDL_MLMODEL_ORIGINAL_SIZE, ori_size) ||
+					    !MDlog.getValue(EMDL_MLMODEL_NR_GROUPS, nr_groups) )
+						REPORT_ERROR("MlModel::readStar: incorrect model_general table");
+
+					MDgroup.readStar(in, "model_groups");
+					group_names.resize(nr_groups, "");
+					FOR_ALL_OBJECTS_IN_METADATA_TABLE(MDgroup)
+					{
+						long int igroup;
+						if (!MDgroup.getValue(EMDL_MLMODEL_GROUP_NO, igroup))
+							REPORT_ERROR("MlModel::readStar: incorrect model_groups table");
+						//Start counting of groups at 1, not at 0....
+						if (!MDgroup.getValue(EMDL_MLMODEL_GROUP_NAME, group_names[igroup-1]))
+							REPORT_ERROR("MlModel::readStar: incorrect model_groups table");
+					}
+
+					sigma2_noise.resize(nr_groups);
+					for (int igroup = 0; igroup < nr_groups; igroup++)
+					{
+						sigma2_noise[igroup].resize(ori_size/2 + 1);
+						MDsigma.readStar(in, "model_group_" + integerToString(igroup + 1));
+						int idx;
+						FOR_ALL_OBJECTS_IN_METADATA_TABLE(MDsigma)
+						{
+							if (!MDsigma.getValue(EMDL_SPECTRAL_IDX, idx))
+								REPORT_ERROR("MlModel::readStar: incorrect table model_group_" + integerToString(igroup + 1));
+							if (!MDsigma.getValue(EMDL_MLMODEL_SIGMA2_NOISE, sigma2_noise[igroup](idx)))
+								REPORT_ERROR("MlModel::readStar: incorrect table model_group_" + integerToString(igroup + 1));
+						}
+					}
+				}
 				else if (stddev_white_noise > 0.)
 					stddev_white_noise /= XSIZE(vol()) * sqrt(2); // fftw normalization and factor sqrt(2) for two-dimensionality of complex plane
 				else
@@ -405,9 +459,9 @@ public:
 							}
 						}
 						int my_mic_id = -1;
-						for (int mic_id = 0; mic_id < model.group_names.size(); mic_id++)
+						for (int mic_id = 0; mic_id < group_names.size(); mic_id++)
 						{
-							if (fn_group == model.group_names[mic_id])
+							if (fn_group == group_names[mic_id])
 							{
 								my_mic_id = mic_id;
 								break;
@@ -426,9 +480,9 @@ public:
 						FOR_ALL_ELEMENTS_IN_FFTW_TRANSFORM(F2D)
 						{
 							int ires = ROUND( sqrt( (RFLOAT)(kp*kp + ip*ip + jp*jp) ) );
-							ires = XMIPP_MIN(ires, model.ori_size/2); // at freqs higher than Nyquist: use last sigma2 value
+							ires = XMIPP_MIN(ires, ori_size/2); // at freqs higher than Nyquist: use last sigma2 value
 
-							RFLOAT sigma = sqrt(DIRECT_A1D_ELEM(model.sigma2_noise[my_mic_id], ires));
+							RFLOAT sigma = sqrt(DIRECT_A1D_ELEM(sigma2_noise[my_mic_id], ires));
 							DIRECT_A3D_ELEM(F2D, k, i, j).real += rnd_gaus(0., sigma);
 							DIRECT_A3D_ELEM(F2D, k, i, j).imag += rnd_gaus(0., sigma);
 						}
@@ -583,7 +637,7 @@ public:
 				if (do_3d_rot)
 				{
 					fn_img.compose(fn_out, imgno+1,"mrc");
-					img.write(fn_img);
+					img.write(fn_img, -1, false, WRITE_OVERWRITE, write_float16 ? Float16: Float);
 				}
 				else
 				{
@@ -591,9 +645,9 @@ public:
 					// First particle: write stack in overwrite mode, from then on just append to it
 					fn_img.compose(imgno+1,fn_out+".mrcs");
 					if (imgno == 0)
-						img.write(fn_img, -1, false, WRITE_OVERWRITE);
+						img.write(fn_img, -1, false, WRITE_OVERWRITE, write_float16 ? Float16: Float);
 					else
-						img.write(fn_img, -1, false, WRITE_APPEND);
+						img.write(fn_img, -1, false, WRITE_APPEND, write_float16 ? Float16: Float);
 				}
 
 				// Set the image name to the output STAR file

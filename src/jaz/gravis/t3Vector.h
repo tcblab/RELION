@@ -170,6 +170,11 @@ namespace gravis
       {
         return x * a + y * b + z * c;
       }
+      
+      t2Vector<T> xy() const
+	  {
+		return t2Vector<T>(x, y);
+	  }
 
       const T& operator[] (int idx) const
       {
@@ -516,6 +521,7 @@ namespace gravis
 
   typedef t3Vector<float> f3Vector;
   typedef t3Vector<double> d3Vector;
+  typedef t3Vector<int> i3Vector;
 
 } // namespace gravis
 
